@@ -1,0 +1,29 @@
+{
+  "name": "floatrans-desktop",
+  "private": true,
+  "version": "0.2.3",
+  "type": "module",
+  "engines": {
+    "node": ">=22 <24 || >=24.14"
+  },
+  "scripts": {
+    "check-node": "node scripts/check-node.mjs",
+    "predev": "npm run check-node",
+    "dev": "vite",
+    "prebuild": "npm run check-node",
+    "build": "vite build",
+    "test": "vitest run",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "svelte": "5.56.8"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "6.2.4",
+    "@tauri-apps/cli": "2.11.4",
+    "typescript": "7.0.2",
+    "vite": "7.3.6",
+    "vitest": "4.1.10"
+  }
+}

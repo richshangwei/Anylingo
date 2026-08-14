@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:drive.google.com)",
+      "Bash(cd ~/.cargo/registry/src/*/windows-0.61.3/ && sed -n '/^\\\\[dependencies/,/^\\\\[\\\\[/p' Cargo.toml | head -40 && echo \"=== lib.rs ===\" && head -40 src/lib.rs)",
+      "PowerShell(cargo test -p floatrans-capture 2>&1)",
+      "PowerShell(cargo check -p floatrans-desktop 2>&1)",
+      "PowerShell(cargo check --workspace --all-targets 2>&1)",
+      "PowerShell($env:PATH = \"$env:APPDATA\\\\nvm\\\\v24.14.1;$env:PATH\"; node --version; Set-Location \"d:\\\\WorkSpace\\\\開發中\\\\即時翻譯\\\\apps\\\\desktop\"; npm test 2>&1 | Select-Object -Last 25)",
+      "PowerShell(\\(Get-Command node\\).Source; Write-Output \"---\"; if \\(Test-Path \"$env:APPDATA\\\\nvm\"\\) { Get-ChildItem \"$env:APPDATA\\\\nvm\" -Directory | Select-Object -ExpandProperty Name } else { Write-Output \"no nvm in APPDATA\" }; Write-Output \"--- NVM_HOME ---\"; $env:NVM_HOME; $env:NVM_SYMLINK)",
+      "PowerShell($env:PATH = \"C:\\\\Users\\\\richs\\\\scoop\\\\persist\\\\nvm\\\\nodejs\\\\v24.14.1;$env:PATH\"; node --version; Set-Location \"d:\\\\WorkSpace\\\\開發中\\\\即時翻譯\\\\apps\\\\desktop\"; npm run build 2>&1 | Select-Object -Last 25)",
+      "PowerShell(& \"C:\\\\Users\\\\richs\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--WorkSpace---------\\\\94f41298-81c4-48f6-a9b6-97b3909c6bb9\\\\scratchpad\\\\probe-hotkeys.ps1\")",
+      "PowerShell($env:PATH = \"C:\\\\Users\\\\richs\\\\scoop\\\\persist\\\\nvm\\\\nodejs\\\\v24.14.1;$env:PATH\"; Set-Location \"d:\\\\WorkSpace\\\\開發中\\\\即時翻譯\\\\apps\\\\desktop\"; npm run build 2>&1 | Select-Object -Last 8; Set-Location \"d:\\\\WorkSpace\\\\開發中\\\\即時翻譯\"; cargo build -p floatrans-desktop 2>&1 | Select-Object -Last 6)",
+      "PowerShell(Set-Location \"d:\\\\WorkSpace\\\\開發中\\\\即時翻譯\"; $p = Start-Process -FilePath \".\\\\target\\\\debug\\\\floatrans-desktop.exe\" -PassThru; Start-Sleep -Seconds 7; Write-Output \"HasExited=$\\($p.HasExited\\)\"; & \"C:\\\\Users\\\\richs\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--WorkSpace---------\\\\94f41298-81c4-48f6-a9b6-97b3909c6bb9\\\\scratchpad\\\\probe-windows.ps1\")",
+      "PowerShell(Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait\\(\"^%r\"\\); Start-Sleep -Seconds 3; & \"C:\\\\Users\\\\richs\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--WorkSpace---------\\\\94f41298-81c4-48f6-a9b6-97b3909c6bb9\\\\scratchpad\\\\probe-windows.ps1\")",
+      "PowerShell(& \"C:\\\\Users\\\\richs\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--WorkSpace---------\\\\94f41298-81c4-48f6-a9b6-97b3909c6bb9\\\\scratchpad\\\\probe-windows.ps1\")",
+      "PowerShell(Set-Location \"d:\\\\WorkSpace\\\\開發中\\\\即時翻譯\"; $p = Start-Process -FilePath \".\\\\target\\\\debug\\\\floatrans-desktop.exe\" -PassThru; Start-Sleep -Seconds 6; Write-Output \"HasExited=$\\($p.HasExited\\) pid=$\\($p.Id\\)\"; & \"C:\\\\Users\\\\richs\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--WorkSpace---------\\\\94f41298-81c4-48f6-a9b6-97b3909c6bb9\\\\scratchpad\\\\probe-windows.ps1\")",
+      "PowerShell(Stop-Process -Force)",
+      "PowerShell($env:PATH = \"C:\\\\Users\\\\richs\\\\scoop\\\\persist\\\\nvm\\\\nodejs\\\\v24.14.1;$env:PATH\"; Set-Location \"d:\\\\WorkSpace\\\\開發中\\\\即時翻譯\\\\apps\\\\desktop\"; npm run tauri dev 2>&1)",
+      "PowerShell(Start-Sleep -Seconds 3; & \"C:\\\\Users\\\\richs\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--WorkSpace---------\\\\94f41298-81c4-48f6-a9b6-97b3909c6bb9\\\\scratchpad\\\\probe-windows.ps1\"; Write-Output \"--- port 1420 ---\"; \\(Test-NetConnection -ComputerName localhost -Port 1420 -WarningAction SilentlyContinue\\).TcpTestSucceeded)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:1420/\" -UseBasicParsing -TimeoutSec 10; Write-Output \"status=$\\($r.StatusCode\\)\"; Write-Output $r.Content } catch { Write-Output \"FAILED: $_\" })",
+      "Bash(python3 -c ' *)",
+      "Bash(node -e ' *)"
+    ]
+  }
+}

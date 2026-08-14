@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <filter id="grain" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="3" seed="17" result="noise"/>
+      <feColorMatrix in="noise" type="saturate" values="0" result="mono"/>
+      <feBlend in="SourceGraphic" in2="mono" mode="multiply"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="220" fill="#f3ecdc"/>
+  <path d="M168 244c166-75 422-103 678-42" fill="none" stroke="#d6a33a" stroke-width="38" stroke-linecap="round" opacity=".9"/>
+  <rect x="221" y="209" width="588" height="610" rx="112" fill="#a4382b" transform="rotate(-2 515 514)"/>
+
+  <!-- 框選標記：對角兩個轉角，呼應「框住畫面上的字就能讀懂」 -->
+  <g fill="none" stroke="#f3ecdc" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" opacity=".95">
+    <path d="M300 386v-52a44 44 0 0 1 44-44h56"/>
+    <path d="M724 638v52a44 44 0 0 1-44 44h-56"/>
+  </g>
+
+  <text x="512" y="648" text-anchor="middle" font-family="PMingLiU, MingLiU, serif" font-size="376" font-weight="700" fill="#f3ecdc">譯</text>
+  <rect width="1024" height="1024" rx="220" fill="transparent" filter="url(#grain)" opacity=".055"/>
+</svg>

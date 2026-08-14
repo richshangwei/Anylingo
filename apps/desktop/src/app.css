@@ -1,0 +1,703 @@
+:root {
+  font-family: "Aptos", "Noto Sans TC", "Microsoft JhengHei UI", sans-serif;
+  color: #211f1b;
+  background: transparent;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --ink: #211f1b;
+  --ink-soft: #696359;
+  --paper: #f4efe5;
+  --paper-deep: #e8dfcf;
+  --vermillion: #ad392e;
+  --gold: #c9993d;
+  --line: rgba(43, 38, 31, 0.14);
+}
+
+* { box-sizing: border-box; }
+html, body, #app { width: 100%; height: 100%; min-width: 0; min-height: 0; margin: 0; }
+body {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 88% -4%, rgba(173, 57, 46, 0.10), transparent 30%),
+    repeating-linear-gradient(90deg, transparent 0 6px, rgba(47, 40, 30, 0.012) 6px 7px),
+    var(--paper);
+}
+body:has(.selection-action), body:has(.region-overlay) { background: transparent; }
+/* 收合時 body 要跟著變深。
+   視窗本身不是透明的，收合外殼的 14px 圓角會把 body 露出來——底下是米色的紙紋，
+   於是深色圖示的四角各掛一塊亮色。系統陰影那圈 1px 白框是在 Rust 那邊關掉的
+   （見 apply_window_shadow），這裡處理的是剩下的這一層。 */
+body:has(.panel-shell.collapsed) { background: rgba(32, 30, 26, 0.98); }
+button, select, input { font: inherit; color: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+
+.panel-shell {
+  position: relative;
+  width: 100%;
+  /* 必須是 height 而非 min-height：min-height 會讓外殼隨內容長高，
+     內部的 flex 子項就永遠不會溢位，卷軸不出現、長文被 body 裁掉。 */
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(39, 34, 27, 0.26);
+  background: rgba(244, 239, 229, 0.96);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.52);
+}
+.panel-shell::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  z-index: -1;
+  border: 1px solid rgba(61, 52, 41, 0.055);
+  pointer-events: none;
+}
+/* 全螢幕時把文字欄限寬置中。攤在 1920px 上讓每行橫跨整個螢幕，
+   眼睛換行時找不到下一行的開頭，比小面板還難讀。
+   限寬做在 padding 而不是 max-width，卷軸才會留在畫面邊緣而不是文字旁邊。 */
+.panel-shell.fullscreen .translation-card,
+.panel-shell.fullscreen .empty-state {
+  padding-inline: max(24px, calc((100% - 820px) / 2));
+}
+.panel-shell.fullscreen .titlebar,
+.panel-shell.fullscreen .context-strip,
+.panel-shell.fullscreen footer {
+  padding-inline: max(15px, calc((100% - 1100px) / 2));
+}
+
+.panel-shell.collapsed {
+  min-height: 48px;
+  border: 0;
+  border-radius: 14px;
+  color: #f6efe3;
+  background: rgba(32, 30, 26, 0.98);
+  box-shadow: 0 7px 24px rgba(29, 23, 17, 0.26);
+}
+
+/* 收合後只剩一顆方形圖示，整塊都是展開鈕，
+   所以游標與 hover 回饋都做在容器上，不再留一顆小按鈕讓人瞄準。 */
+.mini-dock {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  user-select: none;
+  cursor: pointer;
+}
+.mini-dock:hover { background: rgba(255, 255, 255, 0.09); }
+.mini-dock:focus-visible { outline: 2px solid var(--gold); outline-offset: -3px; }
+.mini-seal {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px 8px 8px 3px;
+  color: #fff7e8;
+  background: var(--vermillion);
+  font-family: "Yu Mincho", "Noto Serif TC", serif;
+  font-size: 17px;
+}
+
+.update-banner {
+  min-height: 31px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 12px 5px 15px;
+  color: #f9f2e6;
+  background: var(--ink);
+  font-size: 14px;
+  letter-spacing: 0.03em;
+}
+.update-banner button { border: 0; border-radius: 5px; padding: 6px 11px; font-size: 13px; color: var(--ink); background: var(--gold); cursor: pointer; }
+
+.titlebar {
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 11px 10px 15px;
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand strong {
+  display: block;
+  font-family: "Yu Mincho", "Noto Serif TC", "PMingLiU", serif;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+}
+.brand div > span { display: block; margin-top: 2px; color: #847b6c; font-size: 10px; font-weight: 700; letter-spacing: 0.22em; }
+/* 標誌＝框選標記包住「譯」：一眼說明「框住畫面上的字，就能讀懂」。 */
+.seal {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #fff7e8;
+  background: var(--vermillion);
+  box-shadow: 2px 3px 0 rgba(111, 36, 27, 0.13);
+}
+.seal-glyph {
+  font-family: "Yu Mincho", "Noto Serif TC", serif;
+  font-size: 17px;
+  line-height: 1;
+}
+/* 對角兩個轉角＝裁切／框選標記，只用兩個偽元素，小尺寸也不會糊掉 */
+.seal-frame { position: absolute; inset: 4px; pointer-events: none; }
+.seal-frame::before, .seal-frame::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid rgba(255, 241, 222, 0.92);
+}
+.seal-frame::before { top: 0; left: 0; border-right: 0; border-bottom: 0; border-radius: 2px 0 0 0; }
+.seal-frame::after { right: 0; bottom: 0; border-left: 0; border-top: 0; border-radius: 0 0 2px 0; }
+/* Tauri 只認 event.target 上的 data-tauri-drag-region，事件落在子元素就不會拖曳。
+   標題列的識別文字全部讓出滑鼠事件，讓 .titlebar / .mini-dock 成為 target；
+   按鈕不在此列，仍可點擊。 */
+.brand, .brand *, .mini-seal { pointer-events: none; }
+
+.window-actions { display: flex; gap: 2px; }
+.icon-button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: #6c655a;
+  background: transparent;
+  font-size: 13px;
+  cursor: pointer;
+}
+.icon-button:hover, .icon-button:focus-visible, .icon-button.active { color: var(--ink); background: rgba(43, 38, 31, 0.075); outline: none; }
+.icon-button.active { color: var(--vermillion); }
+
+.context-strip {
+  display: grid;
+  grid-template-columns: 1fr 18px 0.78fr;
+  align-items: end;
+  gap: 8px;
+  padding: 11px 15px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 253, 248, 0.38);
+}
+/* 這一組小標籤（模型／目標／原文／譯文／解釋／待命）原本是 8～10px，
+   在 1080p 以上的螢幕幾乎讀不到。放大到接近兩倍，並同步收掉字距——
+   字級變大後原本的寬字距會吃掉太多寬度，420px 的面板排不下。 */
+.context-strip label > span { display: block; margin: 0 0 5px 2px; color: #8a8172; font-size: 15px; font-weight: 700; letter-spacing: 0.06em; }
+.context-strip select {
+  width: 100%;
+  height: 38px;
+  padding: 0 27px 0 9px;
+  border: 1px solid rgba(60, 52, 41, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.34);
+  outline: none;
+  font-size: 15px;
+}
+.context-strip select:focus-visible { border-color: rgba(173, 57, 46, 0.62); box-shadow: 0 0 0 3px rgba(173, 57, 46, 0.08); }
+.route { padding-bottom: 9px; color: var(--vermillion); font-size: 15px; text-align: center; }
+
+.empty-state { margin: auto 0; min-height: 0; padding: 24px 34px 28px; overflow: auto; }
+.selection-mark { display: block; width: 29px; height: 3px; margin-bottom: 17px; border-radius: 3px; background: var(--gold); transform: rotate(-2deg); }
+.eyebrow { margin: 0 0 9px; color: var(--vermillion); font-size: 14px; font-weight: 800; letter-spacing: 0.12em; }
+.empty-state h1 {
+  margin: 0;
+  font-family: "Yu Mincho", "Noto Serif TC", "PMingLiU", serif;
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0.035em;
+}
+.hint { margin: 15px 0 11px; color: var(--ink-soft); font-size: 14px; line-height: 1.7; }
+.shot-row { display: flex; align-items: center; gap: 10px; }
+kbd {
+  display: inline-grid;
+  min-width: 34px;
+  height: 28px;
+  place-items: center;
+  padding: 0 8px;
+  border: 1px solid #a79d8c;
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.42);
+  font: 13px/1 ui-monospace, monospace;
+}
+.key-plus { margin: 0 4px; color: #928979; font-size: 13px; }
+.notice { margin: 14px 0 0; padding: 9px 11px; border-radius: 7px; color: #74463f; background: rgba(173, 57, 46, 0.07); font-size: 14px; line-height: 1.6; }
+
+.translation-card {
+  flex: 1;
+  min-height: 0;
+  padding: 17px 18px 22px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+/* 只用 ::-webkit-scrollbar，刻意不設 scrollbar-width / scrollbar-color：
+   標準屬性在 Chromium 會蓋掉這組樣式並改用會自動淡出的 overlay 卷軸，
+   長文就又會看起來像被截斷。指定寬度可強制常駐、佔版面的傳統卷軸。 */
+.translation-card::-webkit-scrollbar,
+.empty-state::-webkit-scrollbar,
+.settings-dialog::-webkit-scrollbar { width: 9px; }
+.translation-card::-webkit-scrollbar-track,
+.empty-state::-webkit-scrollbar-track,
+.settings-dialog::-webkit-scrollbar-track { background: transparent; }
+.translation-card::-webkit-scrollbar-thumb,
+.empty-state::-webkit-scrollbar-thumb,
+.settings-dialog::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: rgba(61, 52, 41, 0.30);
+  background-clip: content-box;
+}
+.translation-card::-webkit-scrollbar-thumb:hover,
+.empty-state::-webkit-scrollbar-thumb:hover,
+.settings-dialog::-webkit-scrollbar-thumb:hover { background: rgba(61, 52, 41, 0.52); background-clip: content-box; }
+.source-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px 7px;
+  border: 0;
+  border-bottom: 1px dashed rgba(48, 43, 34, 0.19);
+  color: #80786b;
+  background: transparent;
+  font-size: 14px;
+  cursor: pointer;
+}
+.source-text { margin: 10px 2px 0; color: #625d53; font-size: 14px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 原文改成可編輯，讓使用者能清空後自己貼字，或改幾個字重譯。
+   resize: vertical 是刻意的——橫向拉伸會撐破固定寬度的面板版面。 */
+.source-input {
+  width: 100%;
+  min-height: 82px;
+  margin: 10px 0 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(60, 52, 41, 0.22);
+  border-radius: 8px;
+  color: #4a453d;
+  background: rgba(255, 255, 255, 0.5);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  resize: vertical;
+  outline: none;
+}
+.source-input.tall { min-height: 148px; }
+.source-input:focus { border-color: rgba(173, 57, 46, 0.55); box-shadow: 0 0 0 3px rgba(173, 57, 46, 0.08); }
+.source-input::placeholder { color: #a49b8a; }
+.source-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin-top: 8px; }
+.source-tip { margin-right: auto; color: #948b7b; font-size: 12px; }
+.compose-row { margin-top: 10px; gap: 4px; }
+/* 首頁底部的版號。刻意壓得比正文更淡：它是查得到就好的資訊，
+   不該和「反白後按快捷鍵」那句引導搶注意力。 */
+.version-line {
+  margin: 18px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  opacity: 0.72;
+}
+.version-update {
+  padding: 0;
+  font-size: 12px;
+  color: var(--vermillion);
+  text-decoration: underline;
+}
+.version-uptodate { font-size: 12px; }
+.translation-heading { display: flex; align-items: center; gap: 7px; margin-top: 17px; color: var(--vermillion); font-size: 15px; font-weight: 800; letter-spacing: 0.1em; }
+.translation-text {
+  margin: 10px 0 0;
+  font-family: "Yu Mincho", "Noto Serif TC", "PMingLiU", serif;
+  font-size: 21px;
+  line-height: 1.68;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.translation-text.placeholder { color: #999081; }
+.explanation {
+  margin-top: 20px;
+  padding: 13px 14px 14px;
+  border-left: 2px solid var(--gold);
+  border-radius: 0 8px 8px 0;
+  background: rgba(201, 153, 61, 0.08);
+}
+.explanation-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #8a6a24;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+.explanation-heading button { margin-left: auto; font-size: 14px; min-height: 26px; padding: 0 8px; }
+.explanation-text { margin: 9px 0 0; color: #4f4a41; font-size: 15px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.explanation-text.placeholder { color: #9a917f; }
+
+.status-dot { width: 8px; height: 8px; flex: none; display: inline-block; border-radius: 50%; background: #9b9488; }
+.status-dot.streaming { background: var(--vermillion); box-shadow: 0 0 0 0 rgba(173, 57, 46, 0.38); animation: pulse 1.5s infinite; }
+@keyframes pulse { 70% { box-shadow: 0 0 0 6px rgba(173, 57, 46, 0); } }
+
+footer {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px 9px 15px;
+  border-top: 1px solid var(--line);
+  background: rgba(226, 216, 198, 0.42);
+}
+.status-copy { display: flex; align-items: center; gap: 7px; color: #777064; font-size: 15px; }
+.result-actions { display: flex; align-items: center; gap: 4px; }
+.text-button, .primary-button { min-height: 34px; padding: 0 12px; border-radius: 7px; cursor: pointer; font-size: 15px; }
+.text-button { border: 0; background: transparent; }
+.text-button:hover:not(:disabled) { background: rgba(48, 43, 32, 0.07); }
+.text-button.danger { color: #9e3328; }
+.primary-button { border: 1px solid var(--ink); color: #f7f0e4; background: var(--ink); }
+.primary-button:hover:not(:disabled) { border-color: var(--vermillion); background: var(--vermillion); }
+button:disabled { opacity: 0.42; cursor: default; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid rgba(173, 57, 46, 0.7); outline-offset: 2px; }
+
+.selection-action {
+  width: 28px;
+  height: 28px;
+  margin: 3px;
+  padding: 0;
+  border: 1px solid rgba(94, 28, 21, 0.72);
+  border-radius: 9px 9px 9px 3px;
+  color: #fff7e8;
+  background: var(--vermillion);
+  box-shadow: 0 4px 12px rgba(60, 29, 23, 0.30);
+  font-family: "Yu Mincho", "Noto Serif TC", serif;
+  font-size: 15px;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.selection-action:hover { transform: translateY(-1px) scale(1.03); box-shadow: 0 6px 15px rgba(60, 29, 23, 0.34); }
+
+.region-overlay {
+  position: fixed;
+  inset: 0;
+  cursor: crosshair;
+  background: rgba(24, 21, 17, 0.30);
+  user-select: none;
+  touch-action: none;
+}
+/* 框選開始後改由選取框的外擴陰影負責壓暗，避免同一區疊兩層遮罩。 */
+.region-overlay.selecting { background: transparent; }
+.region-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: 0;
+  padding: 11px 20px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 246, 230, 0.22);
+  border-radius: 10px;
+  color: #f7efe1;
+  background: rgba(28, 24, 19, 0.72);
+  box-shadow: 0 10px 30px rgba(10, 8, 6, 0.38);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  pointer-events: none;
+}
+.region-selection {
+  position: absolute;
+  border: 1px solid var(--gold);
+  /* 用外擴陰影把選取範圍以外的畫面壓暗，框內維持原本亮度。 */
+  box-shadow: 0 0 0 100vmax rgba(24, 21, 17, 0.30);
+  background: transparent;
+  pointer-events: none;
+}
+.region-size {
+  position: absolute;
+  top: -23px;
+  left: 0;
+  padding: 3px 7px;
+  border-radius: 5px;
+  color: #fff7e8;
+  background: var(--vermillion);
+  font: 10px/1.4 ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+.pin-badge { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 3px 7px; border-radius: 5px; color: var(--vermillion); background: rgba(173, 57, 46, 0.09); font-size: 13px; white-space: nowrap; }
+
+.hint-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 68px;
+  z-index: 30;
+  max-width: calc(100% - 32px);
+  padding: 8px 13px;
+  transform: translateX(-50%);
+  border-radius: 8px;
+  color: #f8f1e5;
+  background: rgba(32, 29, 24, 0.93);
+  box-shadow: 0 6px 20px rgba(24, 19, 14, 0.32);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: none;
+  font-size: 14px;
+}
+
+.menu-catcher { position: fixed; inset: 0; z-index: 24; }
+.context-menu {
+  position: fixed;
+  z-index: 25;
+  /* 和 App.svelte 的 openMenu() 常數對齊，否則選單會被視窗邊緣切掉 */
+  width: 230px;
+  padding: 5px;
+  border: 1px solid #a99e8a;
+  border-radius: 9px;
+  background: #f6f1e7;
+  box-shadow: 0 12px 34px rgba(30, 25, 19, 0.28);
+}
+.context-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.context-menu button:hover:not(:disabled), .context-menu button:focus-visible {
+  color: #fff7e8;
+  background: var(--vermillion);
+  outline: none;
+}
+.context-menu button:hover:not(:disabled) kbd { border-color: rgba(255, 247, 232, 0.5); color: #fff7e8; background: transparent; }
+.context-menu kbd { min-width: 0; height: 22px; padding: 0 6px; font-size: 12px; }
+.context-menu .menu-mark { display: inline-flex; flex: none; color: var(--vermillion); }
+.context-menu button:hover .menu-mark { color: #fff7e8; }
+.context-menu hr { height: 1px; margin: 4px 6px; border: 0; background: var(--line); }
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(30, 27, 23, 0.46);
+  backdrop-filter: blur(4px);
+}
+.settings-dialog {
+  width: min(100%, 370px);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 19px;
+  border: 1px solid #958a76;
+  border-radius: 11px;
+  background: #f5efe4;
+  box-shadow: 0 20px 65px rgba(31, 27, 21, 0.31);
+}
+.update-dialog {
+  width: min(100%, 360px);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid #958a76;
+  border-radius: 11px;
+  background: #f5efe4;
+  box-shadow: 0 20px 65px rgba(31, 27, 21, 0.31);
+}
+.update-dialog h2 { margin: 0; font-family: "Yu Mincho", "Noto Serif TC", serif; font-size: 21px; font-weight: 500; }
+.update-version { margin: 6px 0 0; color: #7a7264; font-size: 14px; letter-spacing: 0.04em; }
+.release-notes {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.66);
+}
+.notes-label { margin: 0 0 7px; color: #655e52; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; }
+.release-notes ul { margin: 0; padding-left: 17px; }
+.release-notes li { margin-bottom: 5px; font-size: 14px; line-height: 1.65; }
+.release-notes li:last-child { margin-bottom: 0; }
+.notes-empty { margin: 0; color: #8a8172; font-size: 14px; }
+.update-warning { margin: 12px 0 0; color: #8a5b32; font-size: 13px; line-height: 1.6; }
+.update-error { margin: 10px 0 0; padding: 8px 10px; border-radius: 6px; background: rgba(180, 60, 50, 0.1); color: #a8382c; font-size: 13px; line-height: 1.55; }
+.update-progress-bar { margin: 12px 0 4px; height: 6px; border-radius: 3px; background: rgba(0, 0, 0, 0.08); overflow: hidden; }
+.update-progress-fill { height: 100%; border-radius: 3px; background: var(--gold, #c8a96a); transition: width 0.2s ease; }
+.update-progress-label { margin: 0; color: #6d6559; font-size: 13px; line-height: 1.5; }
+
+.dialog-heading { display: flex; align-items: start; justify-content: space-between; margin-bottom: 13px; }
+.dialog-heading .eyebrow { margin-bottom: 3px; }
+.dialog-heading h2 { margin: 0; font-family: "Yu Mincho", "Noto Serif TC", serif; font-size: 22px; font-weight: 500; }
+.settings-dialog > label { display: grid; gap: 5px; margin-top: 10px; color: #655e52; font-size: 13px; font-weight: 700; letter-spacing: 0.03em; }
+.settings-dialog input, .settings-dialog select {
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid #aca18e;
+  border-radius: 7px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.44);
+  font-size: 14px;
+}
+.settings-dialog input:focus, .settings-dialog select:focus { border-color: var(--vermillion); outline: 3px solid rgba(173, 57, 46, 0.09); }
+.privacy-note { margin: 7px 0 0; color: #7a7264; font-size: 13px; line-height: 1.55; }
+.form-error { margin: 10px 0 0; color: #9e3328; font-size: 13px; line-height: 1.55; }
+.pref-section { margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--line); }
+.pref-section .eyebrow { margin: 0 0 9px; }
+.pref-row {
+  display: flex;
+  align-items: start;
+  gap: 9px;
+  margin-top: 9px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+/* 三選一的說明句，擺在選項之前先交代這一組是在選什麼。 */
+.pref-lead { margin: 0 0 4px; color: #7a7264; font-size: 13px; line-height: 1.55; }
+.pref-row input[type="radio"],
+.pref-row input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  margin-top: 1px;
+  accent-color: var(--vermillion);
+  cursor: pointer;
+}
+.pref-row small { display: block; margin-top: 3px; color: #857c6d; font-size: 13px; line-height: 1.55; }
+
+.update-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+}
+.update-row .eyebrow { margin: 0 0 3px; }
+.update-row button { flex: none; white-space: nowrap; }
+.update-state { margin: 0; color: #6d6559; font-size: 13px; line-height: 1.5; }
+.update-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+/* 沒有新版時「立即更新」是停用的，要看得出來是停用而不是沒反應。 */
+.update-now { padding: 6px 13px; font-size: 13px; }
+.update-now:disabled { opacity: 0.4; cursor: default; }
+/* 設定裡的更新說明。和彈出對話框用同一套 .notes-label / li 樣式，
+   只是換一層底色，讓它讀起來屬於上面那列 UPDATES。 */
+.update-notes-inline {
+  margin-top: 10px;
+  padding: 11px 13px;
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.66);
+}
+.update-notes-inline ul { margin: 0; padding-left: 17px; }
+.update-notes-inline li { margin-bottom: 5px; font-size: 14px; line-height: 1.65; }
+.update-notes-inline li:last-child { margin-bottom: 0; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 16px; }
+.browser-preview-hidden { opacity: 0.35; }
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.streaming { animation: none; }
+  .selection-action { transition: none; }
+}
+
+/* ── 簡易模式面板 ── */
+/* 跟隨選取游標出現的精簡面板，只顯示譯文與複製按鈕。
+   其他功能（解釋、設定、截圖等）在完整面板上操作。 */
+.mini-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(39, 34, 27, 0.26);
+  background: rgba(244, 239, 229, 0.97);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.52);
+}
+.panel-shell.mini { border: 0; }
+
+.mini-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+.mini-seal-small {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px 5px 5px 2px;
+  color: #fff7e8;
+  background: var(--vermillion);
+  font-family: "Yu Mincho", "Noto Serif TC", serif;
+  font-size: 12px;
+}
+.mini-status {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #777064;
+  font-size: 14px;
+}
+.mini-header .icon-button { width: 22px; height: 22px; font-size: 11px; }
+
+.mini-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+.mini-body::-webkit-scrollbar { width: 7px; }
+.mini-body::-webkit-scrollbar-track { background: transparent; }
+.mini-body::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background: rgba(61, 52, 41, 0.28);
+  background-clip: content-box;
+}
+.mini-translation-text {
+  margin: 0;
+  font-family: "Yu Mincho", "Noto Serif TC", "PMingLiU", serif;
+  font-size: 16px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mini-translation-text.placeholder { color: #999081; }
+
+.mini-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--line);
+  background: rgba(226, 216, 198, 0.42);
+}
+.mini-copy-btn { min-height: 30px; padding: 0 13px; font-size: 14px; }

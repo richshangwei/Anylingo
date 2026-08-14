@@ -1,0 +1,11 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "打包 Tauri 專案",
+			"type": "shell",
+			"command": ".\\scripts\\build-release.ps1",
+			"isBackground": false
+		}
+	]
+}
