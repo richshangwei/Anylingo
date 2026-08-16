@@ -686,9 +686,127 @@ fn copy_selection_preserving_clipboard() -> Result<Option<String>, CaptureError>
         return Ok(None);
     }
 
-    let before = {
+    /// 把使用者原本的剪貼簿放回去。
+    ///
+    /// **只有在確定剪貼簿上那份東西是我們這一下 Ctrl+C 造成的時候才可以呼叫。**
+    /// 呼叫端要先確認真的取到文字了；取不到就代表兩件事之一：剪貼簿根本沒被動過
+    /// （沒東西要還原），或者是**別人**寫進去的（那份內容不是我們的，蓋掉就是毀了它）。
+    ///
+    /// 後者不是理論上的顧慮，是實際發生過的：使用者按 Win+Shift+S 框選截圖，
+    /// 框選的拖曳同時觸發了取字備援，而截圖是在放開左鍵之後才落到剪貼簿上，
+    /// 落點正好在我們等待複製結果的那 650 毫秒之內。舊版無論如何都還原，
+    /// 於是剛截好的圖被上一次複製的文字取代——系統的截圖功能看起來就像壞了。
+    ///
+    /// 備份為空時的還原路徑是 `EmptyClipboard()`，破壞性更直接：它會把別人
+    /// 剛放上去的東西清成空的。
+    ///
+    /// `expected` 是我們讀走文字那一刻的序號，對不上就放棄還原。「取到文字了」
+    /// 不等於「board 上現在那份是我們放的」：使用者圈完字順手按的 Ctrl+C 可能比
+    /// 我們晚一步落下，蓋在我們讀完之後。舊版照樣還原，於是他明明按了複製，貼出
+    /// 來的卻是上一次的內容。剪貼簿開著的時候別人動不了，所以在這裡驗是可靠的。
+    fn restore(saved: &Option<Vec<(u32, Vec<u8>)>>, expected: u32) {
+        let Ok(_clipboard) = open_clipboard() else {
+            return;
+        };
+        if unsafe { GetClipboardSequenceNumber() } != expected {
+            trace("clipboard changed after our copy; skipping restore");
+            return;
+        }
+        match saved {
+            Some(formats) => {
+                let _ = write_formats(formats);
+            }
+            None => unsafe {
+                let _ = EmptyClipboard();
+            },
+        }
+    }
+
+    /// 使用者手上還按著修飾鍵嗎。
+    fn modifier_is_down() -> bool {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+        };
+        let down =
+            |key: VIRTUAL_KEY| unsafe { GetAsyncKeyState(key.0 as i32) } as u16 & 0x8000 != 0;
+        down(VK_CONTROL) || down(VK_MENU) || down(VK_SHIFT) || down(VK_LWIN) || down(VK_RWIN)
+    }
+
+    /// 等使用者放開手上的修飾鍵。
+    ///
+    /// 快捷鍵是在「按下」時就觸發的，此刻 Ctrl+Alt+T 三個鍵通常都還按著。
+    /// 若立刻送出模擬的 Ctrl+C，來源程式收到的其實是 Ctrl+Alt+C，
+    /// 絕大多數程式不會把它當成複製，於是備援永遠取不到文字。
+    ///
+    /// Ctrl 也要等。舊版特地不等它，理由是「我們本來就要送 Ctrl」——但我們送完
+    /// 還要送 Ctrl 的**放開**，而 SendInput 的放開會改寫整個系統的鍵盤狀態：
+    /// 使用者手指明明還按著 Ctrl，系統卻已認定它彈起來了。他接著按下 C，前景程式
+    /// 收到的是沒有修飾鍵的純 c——可編輯的地方多一個字母，其他地方毫無反應，
+    /// 得先放開 Ctrl 再按一次才會恢復。圈完字順手按 Ctrl+C 正是最常見的操作。
+    fn wait_for_modifier_release() {
+        let deadline = Instant::now() + Duration::from_millis(700);
+        while Instant::now() < deadline && modifier_is_down() {
+            thread::sleep(Duration::from_millis(20));
+        }
+        // 讓來源程式處理完放開的鍵，再送我們的按鍵
+        thread::sleep(Duration::from_millis(40));
+    }
+
+    /// 等剪貼簿被前景那個程式換掉，把換上去的文字讀回來。
+    ///
+    /// 一併回報讀取當下的序號：還原之前要靠它確認 board 上那份仍是我們讀到的
+    /// 那一份。
+    fn await_copy(foreground: HWND, sequence_before: u32) -> Option<(String, u32)> {
+        let deadline = Instant::now() + Duration::from_millis(650);
+        while Instant::now() < deadline {
+            let sequence = unsafe { GetClipboardSequenceNumber() };
+            if sequence == sequence_before {
+                thread::sleep(Duration::from_millis(15));
+                continue;
+            }
+
+            let _clipboard = open_clipboard().ok()?;
+            let owner = unsafe { GetClipboardOwner() }.unwrap_or_default();
+            let matched = owned_by(owner, foreground);
+            trace(&format!(
+                "sequence changed; owner={owner:?} matches_foreground={matched}"
+            ));
+            if !matched || unsafe { GetClipboardSequenceNumber() } != sequence {
+                return None;
+            }
+            let text = read_text();
+            trace(&format!(
+                "read {} chars",
+                text.as_deref().map(str::len).unwrap_or(0)
+            ));
+            return text.map(|text| (text, sequence));
+        }
+        None
+    }
+
+    wait_for_modifier_release();
+
+    // 等了 700 毫秒仍沒放開，就別送模擬按鍵了。送出去的 Ctrl 放開會把他按著的
+    // 那個 Ctrl 一起關掉；Shift、Alt 還按著的話，我們這一下也不是 Ctrl+C，而是
+    // Ctrl+Shift+C、Ctrl+Alt+C 之類的別的命令。
+    //
+    // 改成旁觀：他按著 Ctrl，多半就是正要自己複製。等那一下落到剪貼簿，讀走內容
+    // 當作取字結果，然後什麼都不還原——board 上那份是他要留下來的東西。
+    if modifier_is_down() {
+        trace("modifier still held; observing the user's own copy instead of sending");
+        let observed = await_copy(foreground, unsafe { GetClipboardSequenceNumber() });
+        return Ok(observed
+            .map(|(text, _)| text)
+            .filter(|text| !text.trim().is_empty()));
+    }
+
+    // 快照要拖到這裡才取。放在等修飾鍵之前的話，那最多 740 毫秒也算進「快照可能
+    // 過期」的窗口裡——使用者在那段期間複製的東西，事後完全看不出來。
+    let (before, sequence_before) = {
         let _clipboard = open_clipboard()?;
-        inspect()
+        // 序號和快照在同一次開啟裡取。剪貼簿開著時誰也插不進來，兩者才確實指向
+        // 同一份內容；日後序號和它對不上，就代表 board 上的不是我們保存的那份了。
+        (inspect(), unsafe { GetClipboardSequenceNumber() })
     };
     let saved = match before {
         ClipboardBefore::Unpreservable => {
@@ -705,58 +823,6 @@ fn copy_selection_preserving_clipboard() -> Result<Option<String>, CaptureError>
         }
     };
 
-    /// 把使用者原本的剪貼簿放回去。
-    ///
-    /// **只有在確定剪貼簿上那份東西是我們這一下 Ctrl+C 造成的時候才可以呼叫。**
-    /// 呼叫端要先確認真的取到文字了；取不到就代表兩件事之一：剪貼簿根本沒被動過
-    /// （沒東西要還原），或者是**別人**寫進去的（那份內容不是我們的，蓋掉就是毀了它）。
-    ///
-    /// 後者不是理論上的顧慮，是實際發生過的：使用者按 Win+Shift+S 框選截圖，
-    /// 框選的拖曳同時觸發了取字備援，而截圖是在放開左鍵之後才落到剪貼簿上，
-    /// 落點正好在我們等待複製結果的那 650 毫秒之內。舊版無論如何都還原，
-    /// 於是剛截好的圖被上一次複製的文字取代——系統的截圖功能看起來就像壞了。
-    ///
-    /// 備份為空時的還原路徑是 `EmptyClipboard()`，破壞性更直接：它會把別人
-    /// 剛放上去的東西清成空的。
-    fn restore(saved: &Option<Vec<(u32, Vec<u8>)>>) {
-        let Ok(_clipboard) = open_clipboard() else {
-            return;
-        };
-        match saved {
-            Some(formats) => {
-                let _ = write_formats(formats);
-            }
-            None => unsafe {
-                let _ = EmptyClipboard();
-            },
-        }
-    }
-
-    /// 等使用者放開觸發快捷鍵的修飾鍵。
-    ///
-    /// 快捷鍵是在「按下」時就觸發的，此刻 Ctrl+Alt+T 三個鍵通常都還按著。
-    /// 若立刻送出模擬的 Ctrl+C，來源程式收到的其實是 Ctrl+Alt+C，
-    /// 絕大多數程式不會把它當成複製，於是備援永遠取不到文字。
-    fn wait_for_modifier_release() {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{
-            GetAsyncKeyState, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
-        };
-        let down =
-            |key: VIRTUAL_KEY| unsafe { GetAsyncKeyState(key.0 as i32) } as u16 & 0x8000 != 0;
-        let deadline = Instant::now() + Duration::from_millis(700);
-        while Instant::now() < deadline {
-            // 不等 Ctrl：我們本來就要送 Ctrl，使用者按著也無妨
-            if !down(VK_MENU) && !down(VK_SHIFT) && !down(VK_LWIN) && !down(VK_RWIN) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        // 讓來源程式處理完放開的鍵，再送我們的按鍵
-        thread::sleep(Duration::from_millis(40));
-    }
-
-    wait_for_modifier_release();
-    let sequence_before = unsafe { GetClipboardSequenceNumber() };
     let key = |virtual_key: VIRTUAL_KEY, flags| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
@@ -780,45 +846,20 @@ fn copy_selection_preserving_clipboard() -> Result<Option<String>, CaptureError>
         return Ok(None);
     }
 
-    let deadline = Instant::now() + Duration::from_millis(650);
-    let mut copied = None;
-    while Instant::now() < deadline {
-        let sequence = unsafe { GetClipboardSequenceNumber() };
-        if sequence == sequence_before {
-            thread::sleep(Duration::from_millis(15));
-            continue;
-        }
-
-        // 讀取這次複製的內容；讀完就跳出，要不要還原由迴圈外依取字結果決定
-        let Ok(_clipboard) = open_clipboard() else {
-            break;
-        };
-        let owner = unsafe { GetClipboardOwner() }.unwrap_or_default();
-        let matched = owned_by(owner, foreground);
-        trace(&format!(
-            "sequence changed; owner={owner:?} matches_foreground={matched}"
-        ));
-        if matched && unsafe { GetClipboardSequenceNumber() } == sequence {
-            copied = read_text();
-            trace(&format!(
-                "read {} chars",
-                copied.as_deref().map(str::len).unwrap_or(0)
-            ));
-        }
-        break;
-    }
+    let copied = await_copy(foreground, sequence_before);
     // 取到文字，才代表剪貼簿上那份是我們放的，該把使用者原本的內容換回去。
     //
     // 取不到就一律不碰：可能是剪貼簿根本沒動過（沒東西要還原），也可能是別人
     // 在這段期間寫了進去（Win+Shift+S 的截圖就是這樣落下來的）。分不出是哪一種
     // 的時候，「什麼都不做」是唯一不會毀掉別人資料的選項。
-    if copied.is_some() {
-        restore(&saved);
-    } else {
-        trace("clipboard left untouched (nothing copied, or someone else wrote to it)");
+    match &copied {
+        Some((_, sequence)) => restore(&saved, *sequence),
+        None => trace("clipboard left untouched (nothing copied, or someone else wrote to it)"),
     }
 
-    Ok(copied.filter(|text| !text.trim().is_empty()))
+    Ok(copied
+        .map(|(text, _)| text)
+        .filter(|text| !text.trim().is_empty()))
 }
 
 #[cfg(test)]
