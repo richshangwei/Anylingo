@@ -313,6 +313,10 @@
     // 輸入欄位維持系統原生選單，才能複製貼上
     if (target?.closest("input, select, textarea")) return;
     event.preventDefault();
+    // 收合後整個視窗只剩右下角一顆 36×36 的圖示，比選單本身還小。選單一開就會
+    // 整片蓋住那顆圖示——而它是收合狀態下唯一能點回展開的地方，等於把面板鎖死。
+    // 原生選單同樣會蓋住，所以上面的 preventDefault 要留著，只是不再開自己的選單。
+    if (collapsed) return;
     // 要和 app.css 的 .context-menu 對齊：這裡只是用來把選單夾在視窗內，
     // 數字對不上就會被邊緣切掉。字級放大並多了「全螢幕」「回到首頁」兩項後一起改。
     const width = 230;

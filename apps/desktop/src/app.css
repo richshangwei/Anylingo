@@ -66,9 +66,9 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .panel-shell.collapsed {
-  min-height: 48px;
+  min-height: 36px;
   border: 0;
-  border-radius: 14px;
+  border-radius: 10px;
   color: #f6efe3;
   background: rgba(32, 30, 26, 0.98);
   box-shadow: 0 7px 24px rgba(29, 23, 17, 0.26);
@@ -81,22 +81,22 @@ button { -webkit-tap-highlight-color: transparent; }
   height: 100%;
   display: grid;
   place-items: center;
-  border-radius: 14px;
+  border-radius: 10px;
   user-select: none;
   cursor: pointer;
 }
 .mini-dock:hover { background: rgba(255, 255, 255, 0.09); }
 .mini-dock:focus-visible { outline: 2px solid var(--gold); outline-offset: -3px; }
 .mini-seal {
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
-  border-radius: 8px 8px 8px 3px;
+  border-radius: 6px 6px 6px 2px;
   color: #fff7e8;
   background: var(--vermillion);
   font-family: "Yu Mincho", "Noto Serif TC", serif;
-  font-size: 17px;
+  font-size: 13px;
 }
 
 .update-banner {

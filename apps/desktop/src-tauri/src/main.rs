@@ -95,7 +95,7 @@ impl ImageRecognition {
 const PANEL_SIZE: (f64, f64) = (480.0, 640.0);
 /// 收合後只剩一顆方形圖示。要跟著改 tauri.conf.json 的 `minWidth`：
 /// 視窗的最小尺寸限制會蓋掉 set_size，比它小的收合尺寸根本套不上去。
-const COLLAPSED_SIZE: (f64, f64) = (48.0, 48.0);
+const COLLAPSED_SIZE: (f64, f64) = (36.0, 36.0);
 /// 簡易版面板的尺寸：跟隨選取游標出現，只顯示譯文與複製按鈕。
 const PANEL_SIZE_MINI: (f64, f64) = (380.0, 220.0);
 
@@ -910,7 +910,7 @@ fn panel_mini(state: tauri::State<'_, AppState>) -> bool {
 ///
 /// Windows 上的無邊框視窗一旦要陰影，系統就會**在四邊加一圈 1px 的白框**
 ///（Tauri 對 `set_shadow` 的說明就是這麼寫的）。在 480×640 的完整面板上那圈白
-/// 只是一道細邊；縮到 48×48 的圖示上，同樣一圈白就佔掉圖示邊長的相當比例，
+/// 只是一道細邊；縮到 36×36 的圖示上，同樣一圈白就佔掉圖示邊長的相當比例，
 /// 看起來就是圖示鑲了白邊、和圓角對不齊。
 ///
 /// 所以陰影只給完整面板，收合時關掉——收合狀態自己用 CSS 的 box-shadow 撐起
