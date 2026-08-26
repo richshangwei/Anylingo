@@ -16,6 +16,7 @@ Windows 10/11 即時翻譯工具。翻譯不該綁在瀏覽器裡——隨譯在
 - 截圖翻譯：框選螢幕範圍，用 Windows 內建 OCR 辨識文字後送出翻譯。
 - `Ctrl+Alt+T` 翻譯選取文字、`Ctrl+Alt+R` 截圖翻譯兩組全域快捷鍵；被其他程式佔用時只會提示，不影響啟動。
 - Ollama `/api/chat` 與 OpenAI-compatible `/v1/chat/completions` 串流介面。
+- 介面支援繁體中文（預設）、英文、日文、簡體中文；選好的語言會記住，下次啟動直接套用。
 - 模型設定存 SQLite；API Key 存 Windows Credential Manager。
 - 譯文面板會開在游標旁邊，放不下時自動翻到另一側；收合中的面板收到譯文會自動展開。
 - 面板恆常置頂；「◇」改為釘選位置，釘選後就不再跟著選取移動。

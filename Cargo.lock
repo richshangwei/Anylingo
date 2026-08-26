@@ -1126,7 +1126,7 @@ dependencies = [
 
 [[package]]
 name = "floatrans-capture"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "base64 0.22.1",
  "png 0.18.1",
@@ -1137,11 +1137,11 @@ dependencies = [
 
 [[package]]
 name = "floatrans-core"
-version = "0.2.5"
+version = "0.2.6"
 
 [[package]]
 name = "floatrans-desktop"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "floatrans-capture",
  "floatrans-core",
@@ -1154,11 +1154,12 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "windows 0.61.3",
 ]
 
 [[package]]
 name = "floatrans-providers"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "async-trait",
  "floatrans-core",
@@ -1173,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "floatrans-storage"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "keyring",
  "rusqlite",

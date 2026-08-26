@@ -373,10 +373,22 @@ footer {
 button:disabled { opacity: 0.42; cursor: default; }
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid rgba(173, 57, 46, 0.7); outline-offset: 2px; }
 
+/* 選取文字後跟在游標旁的那一小排。這個視窗剛好只有這排的大小，所以
+   padding 與 gap 改了就得跟著改 tauri.conf.json 裡 action 視窗的尺寸——
+   算少了會裁掉按鈕，算多了會多出一圈看不見卻擋得住點擊的透明區。 */
+.selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+}
+
 .selection-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
   height: 28px;
-  margin: 3px;
   padding: 0;
   border: 1px solid rgba(94, 28, 21, 0.72);
   border-radius: 9px 9px 9px 3px;
@@ -387,6 +399,13 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
   font-size: 15px;
   cursor: pointer;
   transition: transform 120ms ease, box-shadow 120ms ease;
+}
+/* 搜尋走墨色。兩顆都染成朱紅的話，游標旁只看得到一團紅，得停下來辨認
+   才分得出哪顆是哪顆——而這排按鈕存在的意義就是不必停下來。 */
+.selection-action.search {
+  border-color: rgba(24, 21, 17, 0.72);
+  color: var(--paper);
+  background: var(--ink);
 }
 .selection-action:hover { transform: translateY(-1px) scale(1.03); box-shadow: 0 6px 15px rgba(60, 29, 23, 0.34); }
 

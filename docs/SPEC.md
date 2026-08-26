@@ -53,7 +53,7 @@ crates/
 | label | 用途 | 特性 |
 |---|---|---|
 | `main` | 翻譯面板 | 恆常置頂、無邊框、關閉時隱藏、不可最大化 |
-| `action` | 選取後的「譯」按鈕 | 34×34、不搶焦點、透明 |
+| `action` | 選取後的「譯」「搜」按鈕 | 65×34、不搶焦點、透明 |
 | `region` | 截圖框選覆蓋層 | 鋪滿整個虛擬桌面、透明、僅框選期間顯示 |
 
 三個視窗載入同一份 `index.html`，由 `getCurrentWindow().label` 分支到不同 UI。
@@ -156,14 +156,92 @@ Tauri 2 的前端呼叫視窗 API 需要 ACL 授權，而 `core:default` **只�
 | `capture/clipboard-fallback` | `true` | 圈完字而 UIA 問不到內容時，是否模擬 Ctrl+C 取字。 |
 | `capture/image-recognition` | `"ocr"` | 圖片怎麼轉成文字：`ocr`／`model`／`auto`。見 2.6 與 2.5。 |
 | `model/active-profile` | `""` | 目前選用的模型設定檔 id。 |
+| `ui/locale` | `"zh-TW"` | 介面語言：`zh-TW`／`en`／`ja`／`zh-CN`。見 2.7。 |
 
-前三個是布林（`flag`／`set_flag`），後兩個是字串（`choice`／`set_choice`），
+前三個是布林（`flag`／`set_flag`），其餘是字串（`choice`／`set_choice`），
 前端分別走 `set_preference` 與 `set_choice_preference`。字串偏好的合法值在
 `set_choice_preference` 逐鍵驗證——寫進認不得的值，讀取端只會安靜地退回預設，
 使用者則會看到設定「按了沒有用」。
 
 `model/active-profile` 存起來的原因不只是記住選擇：**截圖覆蓋層是另一個視窗，
 它不載入設定檔清單**，圖片要交給模型辨識時，Rust 這側只能靠這個偏好知道要用誰。
+
+### 2.7 介面語言
+
+支援繁體中文（預設）、英文、日文、簡體中文。選擇存在 `ui/locale`，跨重啟保留。
+
+#### 字串放在哪裡
+
+字串分兩份，管的東西**沒有交集**：
+
+| 檔案 | 管什麼 | 誰畫出來 |
+|---|---|---|
+| `apps/desktop/src/locales/*.ts` | 面板裡的一切文字 | webview |
+| `apps/desktop/src-tauri/src/locale.rs` | 系統匣選單、系統匣提示、快捷鍵佔用通知 | Windows 原生 |
+
+Rust 那份不是重複——**系統匣選單是 Windows 畫的原生選單，webview 連它存在都不知道**。
+兩邊靠 `ui/locale` 的字串值對齊（`zh-TW`／`en`／`ja`／`zh-CN`），對不上就會出現
+面板是英文、右下角是中文。
+
+刻意不共用一份 JSON：Rust 只需要六、七個字串，為它做一套執行期 JSON 解析與回退，
+換來的是「語言檔壞掉時系統匣沒有文字」這種更難查的故障——而系統匣是使用者叫回
+面板的最後一條路。編譯期的 `&'static str` 沒有這個問題。
+
+#### 加一個語言
+
+前端三步，Rust 三步，沒有第四步：
+
+```
+apps/desktop/src/locales/
+  types.ts        ← 字串合約。不用改，除非要加新的字串
+  zh-TW.ts        ← 基準語言，文案以這份為準
+  <新語言>.ts     ← 1. 複製 zh-TW.ts 改檔名，翻過去
+  index.ts        ← 2. LOCALES 陣列加一行
+  locales.test.ts ← 3. 不用改，它會自動檢查新語言
+
+apps/desktop/src-tauri/src/locale.rs
+  UiLocale        ← 4. 加變體，parse／as_str／strings 三處
+  static <新語言> ← 5. 六、七個系統匣字串
+  mod tests       ← 6. 把新變體加進三個測試的陣列
+```
+
+#### 為什麼要有測試擋著
+
+`npm run build` 只跑 vite，**沒有 `tsc`**。所以 `satisfies Locale` 漏一個鍵、或把
+帶變數的字串寫成了普通字串，打包一樣會過，錯誤要等到使用者切到那個語言、走到
+那個畫面才會冒出來（而且多半長成「畫面上出現 undefined」這種最難回報的樣子）。
+
+`locales.test.ts` 把它擋在 `npm test`：鍵集合要一模一樣、字串與函式不能互換、
+帶變數的字串在每個語言要收一樣多的變數、不能有空字串。
+
+#### 幾個刻意的決定
+
+- **語言名用母語書寫**（English 不寫成「英文」）。會來換語言的人多半正是因為
+  看不懂目前這個語言，用當前語言列出選項等於要他先讀懂才找得到出口。
+- **帶變數的字串是函式不是樣板**。中文說「沒有新版本，目前是 0.2.5」，英文說
+  「No new version. You are on 0.2.5」，日文的助詞又得跟著動。`{0}` 這種樣板會把
+  中文的語序偷偷變成所有語言的語序。
+- **產品名進語言檔**。中文圈叫「隨譯」，其他語言叫 Anylingo——讀不出來的名字
+  不能當名字用。印章上的「譯」字則留在 `branding.ts`：那是標誌不是文字。
+- **目標語言不隨介面語言改寫**。下拉選單裡的「日本語」會**原樣送進提示詞**，
+  它是要送出去的值本身，不是介面文案。
+- **已存在的模型設定檔名稱不會被改掉**，那是使用者的資料。只有新增設定檔時的
+  預設名稱跟著語言走。
+
+#### 換語言時 Rust 要多做兩件事
+
+寫入 `ui/locale` 成功之後（順序不能顛倒——存不進去卻換了選單，重開又會變回去）：
+
+1. `apply_tray_locale()` 把系統匣選單整個重建。Tauri 沒有改單一選單項文字的 API。
+2. `emit("panel://locale")` 廣播出去。「譯」按鈕與框選覆蓋層那兩個 webview 建好
+   之後就一直活著（只是藏起來），不會因為換語言而重新載入。
+
+#### 還沒做的
+
+由 Rust 送到面板上的**錯誤訊息**仍是繁體中文（`main.rs` 約 50 處、`floatrans-providers`
+約 27 處、`floatrans-capture` 約 24 處）。介面本身已完全多語化，這部分尚未跟上。
+要補的話得把 `ProviderError` 從「帶著成品訊息」改成「帶著錯誤種類」，由呼叫端依
+語言組字——那是一次跨三個 crate 的簽章改動。
 
 ### 2.6 圖片怎麼變成文字
 

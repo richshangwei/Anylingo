@@ -19,3 +19,13 @@ tauri = { version = "2.11.5", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
+
+# ShellExecuteW（「搜」按鈕把選取文字交給系統的預設瀏覽器）。
+# 標準函式庫沒有「用預設程式開啟」這件事，而 cmd /C start 得跟 cmd 的引號與
+# %VAR% 展開規則纏鬥——百分號編碼過的網址正好滿是 %。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = [
+  "Win32_Foundation",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging"
+] }

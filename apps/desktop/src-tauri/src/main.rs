@@ -1,5 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod locale;
+
+use locale::UiLocale;
+
 use std::{
     fs,
     sync::{
@@ -56,6 +60,11 @@ const PREF_IMAGE_RECOGNITION: &str = "capture/image-recognition";
 /// 一是使用者的選擇本該記住，二是圖片交給模型辨識時 Rust 這側需要知道要用誰——
 /// 而截圖覆蓋層是另一個視窗，它不會載入設定檔清單，問不到主面板選了什麼。
 const PREF_ACTIVE_PROFILE: &str = "model/active-profile";
+/// 介面語言。值見 `locale::UiLocale`，與前端 `locales/types.ts` 的 `LocaleId` 同一組字串。
+///
+/// 這個偏好比其他幾個多管一件事：**系統匣選單是 Rust 建的原生選單**，前端換了語言
+/// 不會動到它，所以寫入這個鍵的時候要順手把選單重建一次（見 `set_choice_preference`）。
+const PREF_UI_LOCALE: &str = "ui/locale";
 
 /// 圖片轉文字的方式。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -123,6 +132,9 @@ struct AppState {
     /// 全螢幕閱讀模式。開著時所有會改尺寸或位置的路徑都要讓開，
     /// 否則一次新翻譯就會把視窗從全螢幕拉回小面板。
     panel_fullscreen: Mutex<bool>,
+    /// 系統匣圖示。留著它是為了換介面語言時能把選單整個換掉——
+    /// Tauri 沒有改單一選單項文字的 API，只能重建，而重建需要這個 handle。
+    tray: Mutex<Option<tauri::tray::TrayIcon>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -284,6 +296,8 @@ struct Preferences {
     /// 預設值刻意是「不上傳」的那一個。截圖可能拍到任何東西，把它送到模型端點
     /// 是使用者該自己決定的事，不能因為升級了一版就默默開始送。
     image_recognition: String,
+    /// 介面語言，例如 `zh-TW`。預設是產品的母語版本。
+    ui_locale: String,
 }
 
 #[tauri::command]
@@ -305,12 +319,32 @@ fn preferences(state: tauri::State<'_, AppState>) -> Result<Preferences, String>
         image_recognition: data
             .choice(PREF_IMAGE_RECOGNITION, ImageRecognition::SystemOcr.as_str())
             .map_err(|error| error.to_string())?,
+        ui_locale: data
+            .choice(PREF_UI_LOCALE, UiLocale::DEFAULT.as_str())
+            .map_err(|error| error.to_string())?,
     })
+}
+
+/// 只問介面語言。
+///
+/// 「譯」按鈕與框選覆蓋層是另外兩個 webview，它們用不到設定檔、釘選狀態那些東西，
+/// 但畫面上仍有字（按鈕的提示、框選的說明）。給它們一個只回一個字串的指令，
+/// 比讓它們去拉整包偏好乾淨。
+#[tauri::command]
+fn ui_locale(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let data = state
+        .data
+        .lock()
+        .map_err(|_| "偏好設定目前無法使用".to_owned())?;
+    data.choice(PREF_UI_LOCALE, UiLocale::DEFAULT.as_str())
+        .map(|value| UiLocale::parse(&value).as_str().to_owned())
+        .map_err(|error| error.to_string())
 }
 
 /// 設定選項多於兩個的偏好。`set_preference` 只收布林，裝不下三選一。
 #[tauri::command]
 fn set_choice_preference(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     key: String,
     value: String,
@@ -319,6 +353,7 @@ fn set_choice_preference(
     // 使用者則會看到設定「按了沒有用」。
     let value = match key.as_str() {
         PREF_IMAGE_RECOGNITION => ImageRecognition::parse(&value).as_str().to_owned(),
+        PREF_UI_LOCALE => UiLocale::parse(&value).as_str().to_owned(),
         PREF_ACTIVE_PROFILE => value,
         _ => return Err(format!("不支援的偏好設定：{key}")),
     };
@@ -327,7 +362,72 @@ fn set_choice_preference(
         .lock()
         .map_err(|_| "偏好設定目前無法使用".to_owned())?
         .set_choice(&key, &value)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    // 換語言要多做兩件 webview 自己做不到的事，而且**要在存檔成功之後**才做——
+    // 存不進去卻換了選單，重開之後又會變回舊語言，比完全沒反應更難理解。
+    if key == PREF_UI_LOCALE {
+        let locale = UiLocale::parse(&value);
+        // 系統匣選單是 Windows 畫的原生選單，前端改不到它。
+        apply_tray_locale(&app, locale);
+        // 「譯」按鈕與框選覆蓋層建好之後就一直活著，不會重新載入，所以用廣播推過去。
+        let _ = app.emit("panel://locale", locale.as_str());
+    }
+    Ok(())
+}
+
+/// 依目前語言重建系統匣選單與提示。
+///
+/// Tauri 沒有「改某一個選單項的文字」這種 API，只能整個選單換掉。重建失敗時
+/// 靜靜留著舊選單：那頂多是語言沒跟上，總比把唯一的入口弄不見好——面板可以隱藏，
+/// 系統匣圖示是使用者叫回面板的最後一條路。
+fn apply_tray_locale(app: &tauri::AppHandle, locale: UiLocale) {
+    let handle = app.clone();
+    // Windows 的選單只能在建立它的執行緒（也就是主執行緒）上動。同步指令目前確實
+    // 跑在主執行緒，但那是 Tauri 的實作細節而不是我們的保證——哪天這個指令為了
+    // 別的理由改成 async，選單就會從背景執行緒被動到，症狀是換語言沒反應或直接當掉。
+    // 繞一趟事件迴圈，兩種情況都對。
+    let _ = app.run_on_main_thread(move || {
+        let strings = locale.strings();
+        let Some(tray) = handle
+            .state::<AppState>()
+            .tray
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
+        else {
+            return;
+        };
+        let Ok(menu) = build_tray_menu(&handle, locale) else {
+            return;
+        };
+        let _ = tray.set_menu(Some(menu));
+        let _ = tray.set_tooltip(Some(strings.tray_tooltip));
+    });
+}
+
+/// 系統匣選單。啟動時與換語言時共用同一份，兩邊才不會長出不一樣的項目。
+fn build_tray_menu(
+    app: &tauri::AppHandle,
+    locale: UiLocale,
+) -> tauri::Result<Menu<tauri::Wry>> {
+    let strings = locale.strings();
+    let show = MenuItem::with_id(app, "show", strings.tray_show, true, None::<&str>)?;
+    let shot = MenuItem::with_id(app, "shot", strings.tray_capture, true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "hide", strings.tray_hide, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", strings.tray_quit, true, None::<&str>)?;
+    Menu::with_items(app, &[&show, &shot, &hide, &quit])
+}
+
+/// 啟動時讀出介面語言。系統匣要在前端還沒載入之前就把文字擺好。
+fn startup_locale(app: &tauri::AppHandle) -> UiLocale {
+    app.try_state::<AppState>()
+        .and_then(|state| {
+            let data = state.data.lock().ok()?;
+            data.choice(PREF_UI_LOCALE, UiLocale::DEFAULT.as_str()).ok()
+        })
+        .map(|value| UiLocale::parse(&value))
+        .unwrap_or(UiLocale::DEFAULT)
 }
 
 /// 上次選用的模型設定檔。前端啟動時回讀，讓選擇跨重啟保留。
@@ -675,6 +775,110 @@ fn accept_pending_selection(
     show_panel_at_cursor(&app, true);
     app.emit_to("main", "capture://captured", text)
         .map_err(|error| error.to_string())
+}
+
+/// 「搜」按鈕用的搜尋網址前綴，查詢字串直接接在後面。
+///
+/// 寫死 Google 是因為它是目前唯一「哪個語言的使用者都認得」的預設值。要換成
+/// 別家（Bing、DuckDuckGo、百度）只要改這一行——真正該做的是開成偏好設定，
+/// 但那要連著設定畫面一起長，先不混進來。
+const SEARCH_ENDPOINT: &str = "https://www.google.com/search?q=";
+
+/// 網址長度的預算（以編碼後的位元組計）。
+///
+/// 使用者很可能整段文章圈起來，而瀏覽器與 ShellExecute 對網址長度都有上限
+/// （實務上兩千出頭）。中日文一個字編出來就是九個字元，超得比想像中快，
+/// 所以寧可截斷也不要整條開不起來。
+const SEARCH_QUERY_BUDGET: usize = 1600;
+
+/// 把選取的文字編成查詢字串。
+///
+/// 連續空白（含換行）先併成一個空格：選取的往往橫跨數行，原樣編出來是一串
+/// `%0D%0A`，搜尋結果會因此變差。
+fn search_query(text: &str) -> String {
+    let mut query = String::new();
+    for (index, word) in text.split_whitespace().enumerate() {
+        let piece = format!("{}{}", if index == 0 { "" } else { "%20" }, percent_encode(word));
+        if query.len() + piece.len() > SEARCH_QUERY_BUDGET {
+            break;
+        }
+        query.push_str(&piece);
+    }
+    query
+}
+
+/// 百分號編碼。為了一個查詢參數引入 `url` crate 不划算，這裡只有一條規則：
+/// RFC 3986 的 unreserved 字元原樣留著，其餘一律逐位元組轉成 %XX。
+fn percent_encode(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(char::from(*byte));
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+/// 交給系統的檔案關聯開啟網址，也就是使用者自己設的預設瀏覽器。
+fn open_in_default_browser(url: &str) -> Result<(), String> {
+    use windows::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+    use windows::core::PCWSTR;
+
+    let operation = wide("open");
+    let target = wide(url);
+    // SAFETY: 兩個字串都以 NUL 收尾，且在呼叫結束前都還活著。
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(target.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // ShellExecute 沿用至今的老式約定：回傳值 <= 32 是錯誤碼，不是控制代碼。
+    if result.0 as isize <= 32 {
+        return Err(format!(
+            "開啟瀏覽器失敗（錯誤碼 {}）",
+            result.0 as isize
+        ));
+    }
+    Ok(())
+}
+
+/// Rust 字串轉成 Win32 要的 NUL 結尾 UTF-16。
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// 選取文字丟給系統的預設瀏覽器搜尋。
+///
+/// 和「譯」共用同一份 `pending_selection`：一樣先收按鈕再取字，理由見
+/// `accept_pending_selection`。搜尋不叫出面板——使用者的注意力接下來在瀏覽器，
+/// 這時再蓋一片譯文面板上去只是擋路。
+#[tauri::command]
+fn search_pending_selection(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    if let Some(action) = app.get_webview_window("action") {
+        let _ = action.hide();
+    }
+    let text = state
+        .pending_selection
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+        .ok_or_else(|| "選取文字已失效，請重新選取".to_owned())?;
+    let query = search_query(&text);
+    if query.is_empty() {
+        return Err("選取的內容沒有可搜尋的文字".to_owned());
+    }
+    open_in_default_browser(&format!("{SEARCH_ENDPOINT}{query}"))
 }
 
 /// 啟動時累積的提醒（例如快捷鍵被佔用），面板讀取後即清除。
@@ -1074,6 +1278,7 @@ fn main() {
             explain_translation,
             cancel_explanation,
             accept_pending_selection,
+            search_pending_selection,
             startup_notice,
             begin_region_capture,
             cancel_region_capture,
@@ -1087,6 +1292,7 @@ fn main() {
             set_panel_fullscreen,
             panel_fullscreen,
             preferences,
+            ui_locale,
             set_preference,
             set_choice_preference,
             active_model_profile,
@@ -1115,6 +1321,7 @@ fn main() {
                 panel_mini: Mutex::new(false),
                 panel_shown_at: Mutex::new(None),
                 panel_fullscreen: Mutex::new(false),
+                tray: Mutex::new(None),
             });
 
             {
@@ -1140,15 +1347,14 @@ fn main() {
 
             start_passive_selection_watcher(app.handle().clone());
 
-            let show = MenuItem::with_id(app, "show", "顯示隨譯", true, None::<&str>)?;
-            let shot = MenuItem::with_id(app, "shot", "截圖翻譯", true, None::<&str>)?;
-            let hide = MenuItem::with_id(app, "hide", "隱藏隨譯", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "結束隨譯", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &shot, &hide, &quit])?;
+            // 系統匣要在前端載入之前就把文字擺好——使用者可能開機後直接按右下角的圖示，
+            // 那時候主面板還沒被叫出來過，webview 一次都還沒跑。
+            let startup_locale = startup_locale(app.handle());
+            let menu = build_tray_menu(app.handle(), startup_locale)?;
 
-            TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().expect("application icon").clone())
-                .tooltip("隨譯 Anylingo — 所見所選，皆可譯")
+                .tooltip(startup_locale.strings().tray_tooltip)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -1169,6 +1375,11 @@ fn main() {
                     }
                 })
                 .build(app)?;
+
+            // 換語言時要拿它重建選單。選單項的文字改不了，只能整個換掉。
+            if let Ok(mut slot) = app.state::<AppState>().tray.lock() {
+                *slot = Some(tray);
+            }
 
             if let Some(window) = app.get_webview_window("main") {
                 let panel = window.clone();
@@ -1238,19 +1449,22 @@ fn main() {
                     .build(),
             )?;
             // 快捷鍵可能已被其他程式佔用，這種情況只要提醒使用者，不該讓隨譯開不起來。
+            let strings = startup_locale.strings();
             let mut occupied = Vec::new();
             if app.global_shortcut().register(shortcut).is_err() {
-                occupied.push("Ctrl＋Alt＋T（翻譯選取文字）");
+                occupied.push(strings.shortcut_translate);
             }
             if app.global_shortcut().register(region_shortcut).is_err() {
-                occupied.push("Ctrl＋Alt＋R（截圖翻譯）");
+                occupied.push(strings.shortcut_capture);
             }
             if !occupied.is_empty()
                 && let Ok(mut notice) = app.state::<AppState>().startup_notice.lock()
             {
-                *notice = Some(format!(
-                    "{} 已被其他程式佔用，可改用系統匣選單或面板上的按鈕。",
-                    occupied.join("、")
+                // 這句話會直接顯示在面板上，所以要跟著介面語言走。它在啟動當下就
+                // 決定好了——之後換語言不會重算，但那是一次性的開機提示，
+                // 為它做失效重算不值得。
+                *notice = Some((strings.shortcuts_occupied)(
+                    &occupied.join(strings.list_separator),
                 ));
             }
 
@@ -1753,4 +1967,39 @@ fn record_update_check(app: &tauri::AppHandle) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let _ = fs::write(dir.join("last-update-check"), secs.to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ascii_survives_encoding_but_everything_else_gets_escaped() {
+        assert_eq!(search_query("rust-lang"), "rust-lang");
+        // 空白是分隔字，一律走 %20 而不是 +：`+` 只在 form-urlencoded 裡是空白。
+        assert_eq!(search_query("hello world"), "hello%20world");
+        assert_eq!(search_query("譯"), "%E8%AD%AF");
+        // 查詢字串裡的 & 和 = 若原樣送出，會被當成參數分隔而截斷搜尋內容。
+        assert_eq!(search_query("a&b=c"), "a%26b%3Dc");
+    }
+
+    #[test]
+    fn line_breaks_collapse_into_single_spaces() {
+        assert_eq!(search_query("  one\r\n\ttwo   three  "), "one%20two%20three");
+    }
+
+    #[test]
+    fn a_selection_with_nothing_but_whitespace_yields_no_query() {
+        // 呼叫端靠這個空字串擋下「開一個沒有搜尋內容的分頁」。
+        assert_eq!(search_query(" \r\n\t "), "");
+    }
+
+    #[test]
+    fn overlong_selections_are_truncated_on_a_word_boundary() {
+        // 中日文一個字編出來就是九個字元，整段文章圈起來很容易超過網址上限。
+        let query = search_query(&"譯 ".repeat(1000));
+        assert!(query.len() <= SEARCH_QUERY_BUDGET);
+        // 截在詞與詞之間，不會留下半截 %E8 這種切壞的逸出序列。
+        assert!(query.ends_with("%E8%AD%AF"));
+    }
 }

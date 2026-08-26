@@ -18,7 +18,8 @@
     | "expand"
     | "close"
     | "fullscreen"
-    | "restore";
+    | "restore"
+    | "search";
 
   export let name: IconName;
   export let size = 16;
@@ -94,6 +95,11 @@
     <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
     <path d="M3 16h3a2 2 0 0 1 2 2v3" />
     <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+  {:else if name === "search"}
+    <!-- 放大鏡。圓心偏左上、握把朝右下，是這個圖示唯一被普遍認得的擺法；
+         鏡片畫到 r=7.5 是因為它要和 14px 的「譯」字並排，太小會顯得矮一截 -->
+    <circle cx="10.5" cy="10.5" r="7.5" />
+    <path d="M16 16l5 5" />
   {/if}
 </svg>
 

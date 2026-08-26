@@ -7,7 +7,8 @@
     createTranslationPanelState,
     type TranslationPanelSnapshot
   } from "./lib/translation-panel-state";
-  import { appName, appNameEn, slogan, tagline } from "./lib/branding";
+  import { appNameEn, sealGlyph } from "./lib/branding";
+  import { DEFAULT_LOCALE_ID, LOCALES, resolveLocale, type LocaleId } from "./locales";
   import Icon from "./lib/Icon.svelte";
 
   const windowLabel = "__TAURI_INTERNALS__" in window ? getCurrentWindow().label : "main";
@@ -23,6 +24,30 @@
   function fireAndForget(command: string, args?: Record<string, unknown>) {
     invoke(command, args).catch((error) => console.error(`[隨譯] ${command}`, error));
   }
+  /**
+   * 目前的介面語言。真值存在 Rust（偏好 `ui/locale`），這裡只是回讀的副本。
+   *
+   * 先給預設值再由 `loadPreferences()` 覆蓋，所以理論上有一瞬間會是繁體中文。
+   * 實務上看不到：面板平常是隱藏的，要等使用者叫出來才顯示，而偏好在掛載當下
+   * 就送出去問了。
+   */
+  let uiLocale: LocaleId = DEFAULT_LOCALE_ID;
+  /**
+   * 畫面上所有文字的來源。**元件裡不該再出現任何寫死的文案**——
+   * 漏一個，那個角落就會在其他三個語言下維持中文。
+   */
+  $: locale = resolveLocale(uiLocale);
+  $: t = locale.strings;
+  $: appName = t.brand.name;
+  /**
+   * 標題列在產品名底下還有一行羅馬字商標。中文版是「隨譯／ANYLINGO」，
+   * 英文版兩行都會是 Anylingo——同一個字疊兩次不是設計，是漏判，所以這裡要藏起來。
+   */
+  $: showWordmark = appName.toLowerCase() !== appNameEn.toLowerCase();
+  // 斷行規則、標點間距與字型挑選都看 <html lang>。不跟著換的話，日文會套到
+  // 中文的字形（同一個 Unicode 碼位在兩地的字形不同），英文則會用中文的斷行規則。
+  $: if (typeof document !== "undefined") document.documentElement.lang = locale.id;
+
   const panel = createTranslationPanelState();
   let snapshot: TranslationPanelSnapshot = panel.snapshot();
   let sourceExpanded = false;
@@ -71,7 +96,22 @@
 
   let profiles: ModelProfile[] = [];
   let modelProfile = "local-ollama";
-  let targetLanguage = "繁體中文";
+  /**
+   * 翻譯目標語言的清單，取自語言登錄表——加一個介面語言，它自然也成為可選的目標。
+   *
+   * 這些字串會**原樣送進提示詞**（模型收到的就是「繁體中文」「English」這種自然
+   * 語言的語言名），所以它們不是介面文案，不隨介面語言改寫。英文介面下這個下拉
+   * 選單依然顯示「日本語」而不是「Japanese」，因為顯示的就是要送出去的值。
+   */
+  const TARGET_LANGUAGES = [...new Set(LOCALES.map((entry) => entry.defaultTargetLanguage))];
+  let targetLanguage = resolveLocale(DEFAULT_LOCALE_ID).defaultTargetLanguage;
+  /**
+   * 使用者動過目標語言沒有。沒動過就跟著介面語言走：選了英文介面卻預設翻成繁體
+   * 中文，第一次用的人得先改一次下拉選單才會得到預期的結果。動過之後就以他選的
+   * 為準，換介面語言不該把翻譯目標一起換掉。
+   */
+  let targetLanguageTouched = false;
+  $: if (!targetLanguageTouched) targetLanguage = locale.defaultTargetLanguage;
   let captureNotice = "";
   let settingsOpen = false;
   let savingSettings = false;
@@ -91,45 +131,54 @@
     : 0;
   let profileDraft = {
     id: "local-ollama",
-    name: "本機 Ollama",
+    name: resolveLocale(DEFAULT_LOCALE_ID).strings.settings.defaultProfileName.ollama,
     provider: "ollama-native" as ModelProfile["provider"],
     endpoint: "http://127.0.0.1:11434",
     model: "qwen3:8b",
     apiKey: ""
   };
 
-  const providerDefaults: Record<ProviderId, { name: string; endpoint: string; model: string }> = {
+  /**
+   * 新增設定檔時的預設值。名稱要跟著介面語言走，所以是反應式而不是常數。
+   *
+   * 只有三個是文案（本機 Ollama、公司內部 API、自訂端點），其餘都是廠商的商標，
+   * 任何語言下都拼一樣，不進語言檔。
+   *
+   * 這裡只影響**新建**的設定檔。已經存到 SQLite 的名字是使用者的資料，
+   * 換介面語言不會、也不該把它們改掉。
+   */
+  $: providerDefaults = {
     anthropic: { name: "Anthropic Claude", endpoint: "https://api.anthropic.com", model: "claude-sonnet-4-5" },
     "azure-openai": { name: "Azure OpenAI", endpoint: "https://YOUR-RESOURCE-NAME.openai.azure.com", model: "" },
     "google-gemini": { name: "Google Gemini", endpoint: "https://generativelanguage.googleapis.com", model: "gemini-3.5-flash" },
     "openai-compatible": { name: "OpenAI", endpoint: "https://api.openai.com", model: "gpt-5-mini" },
     openrouter: { name: "OpenRouter", endpoint: "https://openrouter.ai/api", model: "" },
     xai: { name: "xAI Grok", endpoint: "https://api.x.ai", model: "" },
-    "ollama-native": { name: "本機 Ollama", endpoint: "http://127.0.0.1:11434", model: "qwen3:8b" },
-    fedgpt: { name: "公司內部 API", endpoint: "", model: "" },
-    "custom-endpoint": { name: "自訂端點", endpoint: "", model: "" }
-  };
+    "ollama-native": { name: t.settings.defaultProfileName.ollama, endpoint: "http://127.0.0.1:11434", model: "qwen3:8b" },
+    fedgpt: { name: t.settings.defaultProfileName.fedgpt, endpoint: "", model: "" },
+    "custom-endpoint": { name: t.settings.defaultProfileName.custom, endpoint: "", model: "" }
+  } satisfies Record<ProviderId, { name: string; endpoint: string; model: string }>;
 
   function selectProvider(provider: ProviderId) {
     const defaults = providerDefaults[provider];
     profileDraft = { ...profileDraft, provider, ...defaults, apiKey: "" };
   }
 
+  /// 廠商名是商標，只有「金鑰」兩個字跟著語言換。
   function credentialLabel(provider: ProviderId) {
-    if (provider === "fedgpt") return "API Key";
-    if (provider === "anthropic") return "Anthropic API Key";
-    if (provider === "google-gemini") return "Gemini API Key";
-    if (provider === "azure-openai") return "Azure API Key";
-    return "API Key";
+    if (provider === "anthropic") return `Anthropic ${t.common.apiKey}`;
+    if (provider === "google-gemini") return `Gemini ${t.common.apiKey}`;
+    if (provider === "azure-openai") return `Azure ${t.common.apiKey}`;
+    return t.common.apiKey;
   }
 
   function providerNote(provider: ProviderId) {
-    if (provider === "fedgpt") return "端點與模型名稱請依所屬單位提供的設定填寫。";
-    if (provider === "anthropic") return "使用 Anthropic Messages 串流 API。";
-    if (provider === "google-gemini") return "使用 Gemini streamGenerateContent API。";
-    if (provider === "azure-openai") return "模型名稱請填入 Azure 的部署名稱。";
-    if (provider === "custom-endpoint") return "端點需相容 OpenAI Chat Completions API。";
-    return "使用 OpenAI Chat Completions 相容介面。";
+    if (provider === "fedgpt") return t.settings.note.fedgpt;
+    if (provider === "anthropic") return t.settings.note.anthropic;
+    if (provider === "google-gemini") return t.settings.note.gemini;
+    if (provider === "azure-openai") return t.settings.note.azure;
+    if (provider === "custom-endpoint") return t.settings.note.custom;
+    return t.settings.note.openaiCompatible;
   }
 
   type RegionRect = { x: number; y: number; width: number; height: number };
@@ -293,7 +342,7 @@
   function togglePinned() {
     pinned = !pinned;
     fireAndForget("set_panel_pinned", { pinned });
-    flashHint(pinned ? "已釘選位置，面板不再跟著選取移動" : "已取消釘選，面板會跟著選取位置移動");
+    flashHint(pinned ? t.hints.pinned : t.hints.unpinned);
   }
 
   // 釘選只影響「下一次翻譯時面板會不會移動」，當下畫面沒有變化，
@@ -339,12 +388,12 @@
 
   function toggleCollapsed() {
     if (!collapsed && modalOpen) {
-      flashHint("設定開啟時無法收合，請先關閉設定");
+      flashHint(t.hints.cannotCollapseWhileSettingsOpen);
       return;
     }
     // 全螢幕時收合會把視窗縮成角落小標籤，離開全螢幕後尺寸也對不回來。
     if (fullscreen) {
-      flashHint("全螢幕時無法收合，請先還原視窗");
+      flashHint(t.hints.cannotCollapseWhileFullscreen);
       return;
     }
     collapsed = !collapsed;
@@ -463,6 +512,7 @@
     autoCollapse: boolean;
     clipboardFallback: boolean;
     imageRecognition: ImageRecognition;
+    uiLocale: string;
   };
 
   async function loadPreferences() {
@@ -471,6 +521,20 @@
     autoCollapse = prefs.autoCollapse;
     clipboardFallback = prefs.clipboardFallback;
     imageRecognition = prefs.imageRecognition;
+    // 經過 resolveLocale 而不是直接指派：資料庫裡可能是舊版寫的、或某個已經
+    // 移除的語言檔留下的孤兒，認不得就退回預設，不要讓面板整片變成 undefined。
+    uiLocale = resolveLocale(prefs.uiLocale).id;
+  }
+
+  /**
+   * 換介面語言。存回 Rust 之外還要讓系統匣跟著換——那份選單是 Rust 建的，
+   * 前端改自己的字串不會動到它，少了這一步就會出現「面板是英文、右下角是中文」。
+   * 重建的動作在 Rust 的 `set_choice_preference` 裡，這裡只要把值送到就好。
+   */
+  async function selectLocale(id: LocaleId) {
+    if (id === uiLocale) return;
+    uiLocale = id;
+    await saveChoicePreference("ui/locale", id);
   }
 
   async function savePreference(key: string, value: boolean) {
@@ -519,7 +583,7 @@
 
   async function translate(sourceText: string) {
     if (!modelProfile) {
-      captureNotice = "請先新增模型設定。";
+      captureNotice = t.errors.noModelProfile;
       settingsOpen = true;
       return;
     }
@@ -603,15 +667,15 @@
   }
 
   function updateStatusLabel() {
-    if (checkingUpdate) return "檢查中…";
-    if (updateError) return `檢查失敗：${updateError}`;
-    if (!updateStatus) return "尚未檢查";
-    if (updateStatus.state === "disabled") return "此建置沒有更新頻道，需手動下載新版";
+    if (checkingUpdate) return t.update.checking;
+    if (updateError) return t.update.checkFailed(updateError);
+    if (!updateStatus) return t.update.notChecked;
+    if (updateStatus.state === "disabled") return t.update.disabled;
     // 「沒有新版本」要講在最前面。使用者按下「檢查更新」想知道的就是這件事，
     // 把目前版號擺在前面（舊版寫「已是最新版本（0.2.1）」）會讓人先讀到一個版號，
     // 還要再想一下那是不是新的。
-    if (updateStatus.state === "upToDate") return `沒有新版本，目前是 ${updateStatus.current}`;
-    return `有新版本 ${updateStatus.version} 可以更新`;
+    if (updateStatus.state === "upToDate") return t.update.upToDate(updateStatus.current);
+    return t.update.available(updateStatus.version);
   }
 
   /// 更新說明拆成一行一項。latest.json 的 notes 是 CHANGELOG 的條列原文，
@@ -645,7 +709,7 @@
       copied = true;
       window.setTimeout(() => (copied = false), 1400);
     } catch (error) {
-      captureNotice = `複製失敗：${String(error)}`;
+      captureNotice = t.errors.copyFailed(String(error));
     }
   }
 
@@ -660,7 +724,23 @@
 
   onMount(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    if (isActionWindow || isRegionWindow) return;
+
+    // 「譯」按鈕與框選覆蓋層是各自獨立的 webview，各跑一份這個元件。它們用不到
+    // 設定檔、釘選狀態那些東西，但**還是有字要顯示**（按鈕的提示、框選的說明），
+    // 所以介面語言要在早退之前就問。少了這一段，主面板換成英文之後，選取時冒出來
+    // 的那顆按鈕與框選畫面上的說明仍然是中文。
+    void invokeWhenReady<string>("ui_locale")
+      .then((id) => (uiLocale = resolveLocale(id).id))
+      .catch(() => undefined);
+    // 這兩個 webview 建好之後就一直活著（只是藏起來），不會因為使用者在設定裡
+    // 換了語言而重新載入。所以換語言要用廣播推過來，否則得重開程式才會生效。
+    const localeChanged = listen<string>("panel://locale", ({ payload }) => {
+      uiLocale = resolveLocale(payload).id;
+    });
+
+    if (isActionWindow || isRegionWindow) {
+      return () => void localeChanged.then((off) => off());
+    }
 
     void loadProfiles().catch((error) => (captureNotice = String(error)));
     void loadPreferences().catch(() => undefined);
@@ -775,7 +855,8 @@
       ),
       listen("update://installing", () => {
         updateProgress = null;
-      })
+      }),
+      localeChanged
     ];
 
     return () => {
@@ -823,51 +904,61 @@
         <span class="region-size">{Math.round(regionRect.width)} × {Math.round(regionRect.height)}</span>
       </div>
     {:else}
-      <p class="region-hint">拖曳框選要翻譯的畫面範圍　·　Esc 取消</p>
+      <p class="region-hint">{t.region.hint}</p>
     {/if}
   </div>
 {:else if isActionWindow}
-  <button
-    class="selection-action"
-    aria-label="翻譯選取文字"
-    title="翻譯選取文字"
-    onclick={() => fireAndForget("accept_pending_selection")}
-  >譯</button>
+  <!-- 選取文字後跟在游標旁的那一小排。兩顆按鈕共用同一份選取內容，按下哪一顆
+       都會把它取走並收起這個視窗，所以順序就是使用者最常按的順序：先譯後搜。 -->
+  <div class="selection-actions">
+    <button
+      class="selection-action"
+      aria-label={t.region.translateSelection}
+      title={t.region.translateSelection}
+      onclick={() => fireAndForget("accept_pending_selection")}
+    >{sealGlyph}</button>
+    <button
+      class="selection-action search"
+      aria-label={t.region.searchSelection}
+      title={t.region.searchSelection}
+      onclick={() => fireAndForget("search_pending_selection")}
+    ><Icon name="search" size={15} /></button>
+  </div>
 {:else}
 <main
   class:collapsed
   class:mini={miniMode}
   class:fullscreen
   class="panel-shell"
-  aria-label="翻譯面板"
+  aria-label={t.common.panelLabel}
   oncontextmenu={openMenu}
 >
   {#if miniMode && !collapsed}
     <div class="mini-panel" data-tauri-drag-region>
       <div class="mini-header" data-tauri-drag-region>
-        <span class="mini-seal-small" aria-hidden="true">譯</span>
+        <span class="mini-seal-small" aria-hidden="true">{sealGlyph}</span>
         <span class="mini-status">
           <span class:streaming={snapshot.status === "streaming"} class="status-dot"></span>
-          {snapshot.status === "streaming" ? "翻譯中" : snapshot.status === "idle" ? "待命" : ""}
+          {snapshot.status === "streaming" ? t.status.streaming : snapshot.status === "idle" ? t.status.idle : ""}
         </span>
-        <button class="icon-button" aria-label="展開為完整面板" title="展開為完整面板" onclick={expandToFull}>
+        <button class="icon-button" aria-label={t.mini.expandToFull} title={t.mini.expandToFull} onclick={expandToFull}>
           <Icon name="expand" size={14} />
         </button>
-        <button class="icon-button" aria-label="關閉面板" title="關閉" onclick={hidePanel}>
+        <button class="icon-button" aria-label={t.titlebar.hidePanel} title={t.common.close} onclick={hidePanel}>
           <Icon name="close" size={14} />
         </button>
       </div>
       <div class="mini-body" bind:this={translationCard}>
         <p class:placeholder={!snapshot.translatedText} class="mini-translation-text">
-          {snapshot.translatedText || captureNotice || "正在等待模型回應…"}
+          {snapshot.translatedText || captureNotice || t.status.waitingForModel}
         </p>
       </div>
       <div class="mini-footer">
         {#if snapshot.status === "streaming"}
-          <button class="text-button danger" onclick={stopTranslation}>停止</button>
+          <button class="text-button danger" onclick={stopTranslation}>{t.common.stop}</button>
         {/if}
         <button class="primary-button mini-copy-btn" disabled={!snapshot.translatedText} onclick={copyTranslation}>
-          {copied ? "已複製" : "複製"}
+          {copied ? t.common.copied : t.common.copy}
         </button>
       </div>
     </div>
@@ -878,8 +969,8 @@
       class="mini-dock"
       role="button"
       tabindex="0"
-      aria-label="展開{appName}翻譯面板"
-      title="{appName}　·　點一下展開，拖曳可移動"
+      aria-label={t.mini.dockLabel(appName)}
+      title={t.mini.dockHint(appName)}
       onpointerdown={beginDockPress}
       onpointermove={trackDockPress}
       onpointerup={endDockPress}
@@ -890,47 +981,47 @@
         toggleCollapsed();
       }}
     >
-      <span class="mini-seal" aria-hidden="true">譯</span>
+      <span class="mini-seal" aria-hidden="true">{sealGlyph}</span>
     </div>
   {:else}
   {#if availableUpdate}
     <aside class="update-banner" role="status">
-      <span>{appName} {availableUpdate.version} 已可更新</span>
-      <button disabled={installingUpdate} onclick={() => void installAvailableUpdate()}>{installingUpdate ? "安裝中…" : "更新"}</button>
+      <span>{t.update.banner(appName, availableUpdate.version)}</span>
+      <button disabled={installingUpdate} onclick={() => void installAvailableUpdate()}>{installingUpdate ? t.update.installing : t.update.install}</button>
     </aside>
   {/if}
   <header class="titlebar" data-tauri-drag-region>
     <div class="brand" data-tauri-drag-region>
       <span class="seal" aria-hidden="true">
         <span class="seal-frame"></span>
-        <span class="seal-glyph">譯</span>
+        <span class="seal-glyph">{sealGlyph}</span>
       </span>
       <div data-tauri-drag-region>
         <strong>{appName}</strong>
-        <span>{appNameEn}</span>
+        {#if showWordmark}<span>{appNameEn}</span>{/if}
       </div>
     </div>
     <div class="window-actions">
       <button
         class="icon-button"
-        aria-label="回到首頁"
-        title="回到首頁：清空這一輪的原文與譯文，還原視窗"
+        aria-label={t.titlebar.home}
+        title={t.titlebar.homeHint}
         onclick={() => void goHome()}
       >
         <Icon name="home" />
       </button>
-      <button class="icon-button" aria-label="截圖翻譯" title="截圖翻譯（Ctrl＋Alt＋R）" onclick={() => void startRegionCapture()}>
+      <button class="icon-button" aria-label={t.titlebar.capture} title={t.titlebar.captureHint} onclick={() => void startRegionCapture()}>
         <Icon name="capture" />
       </button>
-      <button class="icon-button" aria-label="模型設定" title="模型設定" onclick={editSelectedProfile}>
+      <button class="icon-button" aria-label={t.titlebar.settings} title={t.titlebar.settings} onclick={editSelectedProfile}>
         <Icon name="settings" />
       </button>
       <button
         class:active={pinned}
         class="icon-button"
-        aria-label={pinned ? "取消釘選位置" : "釘選目前位置"}
+        aria-label={pinned ? t.titlebar.unpin : t.titlebar.pin}
         aria-pressed={pinned}
-        title={pinned ? "取消釘選，面板會跟著選取位置移動" : "釘選目前位置，面板不再跟著移動"}
+        title={pinned ? t.titlebar.unpinHint : t.titlebar.pinHint}
         onclick={togglePinned}
       >
         <Icon name="pin" filled={pinned} />
@@ -938,39 +1029,43 @@
       <button
         class:active={fullscreen}
         class="icon-button"
-        aria-label={fullscreen ? "還原視窗大小" : "放大至全螢幕"}
+        aria-label={fullscreen ? t.titlebar.restore : t.titlebar.fullscreen}
         aria-pressed={fullscreen}
-        title={fullscreen ? "還原視窗大小" : "放大至全螢幕"}
+        title={fullscreen ? t.titlebar.restore : t.titlebar.fullscreen}
         onclick={toggleFullscreen}
       >
         <Icon name={fullscreen ? "restore" : "fullscreen"} />
       </button>
-      <button class="icon-button" aria-label={collapsed ? "展開面板" : "收合面板"} title={collapsed ? "展開" : "收合至右下角"} onclick={toggleCollapsed}>
+      <button class="icon-button" aria-label={collapsed ? t.menu.expand : t.common.collapse} title={collapsed ? t.titlebar.expandHint : t.titlebar.collapseHint} onclick={toggleCollapsed}>
         <Icon name={collapsed ? "expand" : "collapse"} />
       </button>
-      <button class="icon-button" aria-label="關閉面板" title="關閉" onclick={hidePanel}>
+      <button class="icon-button" aria-label={t.titlebar.hidePanel} title={t.common.close} onclick={hidePanel}>
         <Icon name="close" />
       </button>
     </div>
   </header>
 
-  <section class="context-strip" aria-label="翻譯設定">
+  <section class="context-strip" aria-label={t.titlebar.settings}>
     <label>
-      <span>模型</span>
-      <select bind:value={modelProfile} onchange={rememberActiveProfile} aria-label="模型設定檔">
+      <span>{t.strip.model}</span>
+      <select bind:value={modelProfile} onchange={rememberActiveProfile} aria-label={t.strip.modelProfile}>
         {#each profiles as profile}
           <option value={profile.id}>{profile.name}</option>
         {/each}
-        {#if profiles.length === 0}<option value="">尚未設定模型</option>{/if}
+        {#if profiles.length === 0}<option value="">{t.strip.noModel}</option>{/if}
       </select>
     </label>
     <span class="route" aria-hidden="true">→</span>
     <label>
-      <span>目標</span>
-      <select bind:value={targetLanguage} aria-label="目標語言">
-        <option>繁體中文</option>
-        <option>English</option>
-        <option>日本語</option>
+      <span>{t.strip.target}</span>
+      <select
+        bind:value={targetLanguage}
+        aria-label={t.strip.targetLanguage}
+        onchange={() => (targetLanguageTouched = true)}
+      >
+        {#each TARGET_LANGUAGES as language}
+          <option>{language}</option>
+        {/each}
       </select>
     </label>
   </section>
@@ -978,35 +1073,35 @@
   {#if snapshot.status === "idle"}
     <section class="empty-state" aria-live="polite">
       {#if composing}
-        <p class="eyebrow">貼上文字</p>
+        <p class="eyebrow">{t.empty.pasteEyebrow}</p>
         <textarea
           class="source-input tall"
           bind:value={sourceDraft}
-          aria-label="要翻譯的文字"
-          placeholder="貼上或輸入要翻譯的文字，也可以直接貼上截圖"
+          aria-label={t.empty.textToTranslate}
+          placeholder={t.empty.pastePlaceholder}
           spellcheck="false"
           onkeydown={sourceKeydown}
         ></textarea>
         <div class="source-actions">
-          <span class="source-tip">Ctrl＋Enter 翻譯</span>
-          <button class="text-button" onclick={() => (composing = false)}>返回</button>
-          <button class="text-button" onclick={() => void pasteImageTranslate()}>貼上圖片</button>
-          <button class="primary-button" disabled={!sourceDraft.trim()} onclick={() => void translateDraft()}>翻譯</button>
+          <span class="source-tip">{t.common.submitHint}</span>
+          <button class="text-button" onclick={() => (composing = false)}>{t.common.back}</button>
+          <button class="text-button" onclick={() => void pasteImageTranslate()}>{t.common.pasteImage}</button>
+          <button class="primary-button" disabled={!sourceDraft.trim()} onclick={() => void translateDraft()}>{t.common.translate}</button>
         </div>
       {:else}
         <span class="selection-mark" aria-hidden="true"></span>
-        <p class="eyebrow">{slogan}</p>
-        <h1>{tagline}</h1>
-        <p class="hint">在任何應用程式反白文字後，按下快捷鍵。</p>
-        <kbd>Ctrl</kbd><span class="key-plus">＋</span><kbd>Alt</kbd><span class="key-plus">＋</span><kbd>T</kbd>
-        <p class="hint">選不到文字時，改用框選截圖，辨識畫面上的字再翻譯。</p>
+        <p class="eyebrow">{t.brand.slogan}</p>
+        <h1>{t.brand.tagline}</h1>
+        <p class="hint">{t.empty.selectHint}</p>
+        <kbd>Ctrl</kbd><span class="key-plus">{t.common.keyPlus}</span><kbd>Alt</kbd><span class="key-plus">{t.common.keyPlus}</span><kbd>T</kbd>
+        <p class="hint">{t.empty.captureHint}</p>
         <div class="shot-row">
-          <button class="primary-button" onclick={() => void startRegionCapture()}>截圖翻譯</button>
-          <span><kbd>Ctrl</kbd><span class="key-plus">＋</span><kbd>Alt</kbd><span class="key-plus">＋</span><kbd>R</kbd></span>
+          <button class="primary-button" onclick={() => void startRegionCapture()}>{t.empty.capture}</button>
+          <span><kbd>Ctrl</kbd><span class="key-plus">{t.common.keyPlus}</span><kbd>Alt</kbd><span class="key-plus">{t.common.keyPlus}</span><kbd>R</kbd></span>
         </div>
         <div class="shot-row compose-row">
-          <button class="text-button" onclick={() => (composing = true)}>貼上文字翻譯</button>
-          <button class="text-button" onclick={() => void pasteImageTranslate()}>貼上圖片翻譯</button>
+          <button class="text-button" onclick={() => (composing = true)}>{t.empty.pasteText}</button>
+          <button class="text-button" onclick={() => void pasteImageTranslate()}>{t.empty.pasteImage}</button>
         </div>
         {#if appVersion}
           <p class="version-line">
@@ -1015,10 +1110,10 @@
               <!-- 只有真的偵測到新版才給點。沒有新版時這裡是純文字，不是停用的按鈕：
                    會不會亮起來，本身就是「有沒有新版」最直接的回答。 -->
               <button class="text-button version-update" onclick={() => (updatePromptOpen = true)}>
-                有新版本 {availableUpdate.version}
+                {t.empty.updateAvailable(availableUpdate.version)}
               </button>
             {:else if updateStatus?.state === "upToDate"}
-              <span class="version-uptodate">沒有新版本</span>
+              <span class="version-uptodate">{t.empty.upToDate}</span>
             {/if}
           </p>
         {/if}
@@ -1028,53 +1123,53 @@
   {:else}
     <section class="translation-card" aria-live="polite" bind:this={translationCard}>
       <button class="source-toggle" onclick={() => (sourceExpanded = !sourceExpanded)}>
-        <span>原文</span>
-        <span>{sourceExpanded ? "收合" : "展開"}</span>
+        <span>{t.card.source}</span>
+        <span>{sourceExpanded ? t.common.collapse : t.common.expand}</span>
       </button>
       {#if sourceExpanded}
         <textarea
           class="source-input"
           bind:value={sourceDraft}
-          aria-label="原文，可修改後重新翻譯"
-          placeholder="清空後可以自己貼上或輸入要翻譯的文字"
+          aria-label={t.card.sourceEditable}
+          placeholder={t.card.sourcePlaceholder}
           spellcheck="false"
           onkeydown={sourceKeydown}
         ></textarea>
         <div class="source-actions">
-          <span class="source-tip">Ctrl＋Enter 翻譯</span>
-          <button class="text-button" disabled={!sourceDraft} onclick={clearSource}>清空</button>
-          <button class="text-button" onclick={() => void pasteImageTranslate()}>貼上圖片</button>
+          <span class="source-tip">{t.common.submitHint}</span>
+          <button class="text-button" disabled={!sourceDraft} onclick={clearSource}>{t.common.clear}</button>
+          <button class="text-button" onclick={() => void pasteImageTranslate()}>{t.common.pasteImage}</button>
           <button
             class="primary-button"
             disabled={!sourceDraft.trim() || snapshot.status === "streaming"}
             onclick={() => void translateDraft()}
-          >翻譯</button>
+          >{t.common.translate}</button>
         </div>
       {/if}
 
       <div class="translation-heading">
-        <span>譯文</span>
+        <span>{t.card.translation}</span>
         <span class:streaming={snapshot.status === "streaming"} class="status-dot"></span>
       </div>
       <p class:placeholder={!snapshot.translatedText} class="translation-text">
-        {snapshot.translatedText || captureNotice || "正在等待模型回應…"}
+        {snapshot.translatedText || captureNotice || t.status.waitingForModel}
       </p>
 
       {#if explanationRequested}
         <div class="explanation">
           <div class="explanation-heading">
-            <span>解釋</span>
+            <span>{t.card.explanation}</span>
             <span class:streaming={explaining} class="status-dot"></span>
-            <button class="text-button" onclick={dismissExplanation}>{explaining ? "停止" : "收起"}</button>
+            <button class="text-button" onclick={dismissExplanation}>{explaining ? t.common.stop : t.card.hide}</button>
           </div>
           {#if explanationError}
             <p class="form-error" role="alert">{explanationError}</p>
           {:else if explanation}
             <p class="explanation-text">{explanationText}</p>
           {:else if explaining}
-            <p class="explanation-text placeholder">正在請模型說明…</p>
+            <p class="explanation-text placeholder">{t.card.explanationLoading}</p>
           {:else}
-            <p class="explanation-text placeholder">這個模型沒有回覆說明，可以再試一次或換一個模型。</p>
+            <p class="explanation-text placeholder">{t.card.explanationEmpty}</p>
           {/if}
         </div>
       {/if}
@@ -1084,21 +1179,21 @@
   <footer>
     <div class="status-copy">
       <span class:streaming={snapshot.status === "streaming"} class="status-dot"></span>
-      {snapshot.status === "streaming" ? "翻譯中" : snapshot.status === "cancelled" ? "已停止" : "待命"}
-      {#if pinned}<span class="pin-badge" title="面板已釘選在目前位置"><Icon name="pin" filled size={12} />已釘選</span>{/if}
+      {snapshot.status === "streaming" ? t.status.streaming : snapshot.status === "cancelled" ? t.status.cancelled : t.status.idle}
+      {#if pinned}<span class="pin-badge" title={t.footer.pinnedHint}><Icon name="pin" filled size={12} />{t.footer.pinned}</span>{/if}
     </div>
     <div class="result-actions">
       {#if snapshot.status === "streaming"}
-        <button class="text-button danger" onclick={stopTranslation}>停止</button>
+        <button class="text-button danger" onclick={stopTranslation}>{t.common.stop}</button>
       {/if}
       <button
         class="text-button"
-        title="請模型補充說明術語、縮寫與語氣，不影響上方譯文"
+        title={t.footer.explainHint}
         disabled={!snapshot.translatedText || explaining}
         onclick={() => void explainTranslation()}
-      >{explaining ? "解釋中…" : "解釋"}</button>
+      >{explaining ? t.footer.explaining : t.footer.explain}</button>
       <button class="primary-button" disabled={!snapshot.translatedText} onclick={copyTranslation}>
-        {copied ? "已複製" : "複製譯文"}
+        {copied ? t.common.copied : t.footer.copyTranslation}
       </button>
     </div>
   </footer>
@@ -1112,27 +1207,27 @@
 {#if updatePromptOpen && availableUpdate}
   <div class="dialog-backdrop" role="presentation">
     <div class="update-dialog" role="alertdialog" aria-modal="true" aria-labelledby="update-title">
-      <p class="eyebrow">UPDATE AVAILABLE</p>
-      <h2 id="update-title">有新版本可以更新</h2>
+      <p class="eyebrow">{t.update.eyebrow}</p>
+      <h2 id="update-title">{t.update.title}</h2>
       <p class="update-version">{appName} {availableUpdate.version}</p>
 
       <div class="release-notes">
         {#if releaseNoteLines(availableUpdate.notes).length}
-          <p class="notes-label">這次更新的內容</p>
+          <p class="notes-label">{t.update.notesLabel}</p>
           <ul>
             {#each releaseNoteLines(availableUpdate.notes) as line}
               <li>{line}</li>
             {/each}
           </ul>
         {:else}
-          <p class="notes-empty">這個版本沒有附上更新說明。</p>
+          <p class="notes-empty">{t.update.notesEmpty}</p>
         {/if}
       </div>
 
-      <p class="update-warning">更新會關閉目前的翻譯視窗並重新啟動，進行中的翻譯會中斷。</p>
+      <p class="update-warning">{t.update.warning}</p>
 
       {#if updateError}
-        <p class="update-error">更新失敗：{updateError}</p>
+        <p class="update-error">{t.update.failed(updateError)}</p>
       {/if}
 
       {#if installingUpdate && updateProgress}
@@ -1140,20 +1235,20 @@
           <div class="update-progress-fill" style="width: {updateProgressPct}%"></div>
         </div>
         <p class="update-progress-label">
-          {#if updateProgressPct > 0}{updateProgressPct}%{:else}下載中…{/if}
+          {#if updateProgressPct > 0}{updateProgressPct}%{:else}{t.update.downloading}{/if}
         </p>
       {:else if installingUpdate}
-        <p class="update-progress-label">下載完成，即將重新啟動…</p>
+        <p class="update-progress-label">{t.update.restarting}</p>
       {/if}
 
       <div class="dialog-actions">
-        <button type="button" class="text-button" disabled={installingUpdate} onclick={dismissUpdatePrompt}>稍後再說</button>
+        <button type="button" class="text-button" disabled={installingUpdate} onclick={dismissUpdatePrompt}>{t.update.later}</button>
         <button
           type="button"
           class="primary-button"
           disabled={installingUpdate}
           onclick={() => void installAvailableUpdate()}
-        >{installingUpdate ? "更新中…" : "立即更新"}</button>
+        >{installingUpdate ? t.update.installing : t.update.installNow}</button>
       </div>
     </div>
   </div>
@@ -1168,75 +1263,93 @@
   ></div>
   <div class="context-menu" role="menu" style="left: {menu.x}px; top: {menu.y}px;">
     <button role="menuitem" onclick={() => runFromMenu(() => void goHome())}>
-      <span>回到首頁</span>
+      <span>{t.menu.home}</span>
     </button>
     <button role="menuitem" onclick={() => runFromMenu(() => void startRegionCapture())}>
-      <span>截圖翻譯</span><kbd>Ctrl＋Alt＋R</kbd>
+      <span>{t.menu.capture}</span><kbd>Ctrl{t.common.keyPlus}Alt{t.common.keyPlus}R</kbd>
     </button>
     <button role="menuitem" onclick={() => runFromMenu(() => void pasteImageTranslate())}>
-      <span>貼上圖片翻譯</span><kbd>Ctrl＋V</kbd>
+      <span>{t.menu.pasteImage}</span><kbd>Ctrl{t.common.keyPlus}V</kbd>
     </button>
     <button role="menuitemcheckbox" aria-checked={pinned} onclick={() => runFromMenu(togglePinned)}>
-      <span>{pinned ? "取消釘選位置" : "釘選目前位置"}</span><span class="menu-mark"><Icon name="pin" filled={pinned} size={14} /></span>
+      <span>{pinned ? t.menu.unpin : t.menu.pin}</span><span class="menu-mark"><Icon name="pin" filled={pinned} size={14} /></span>
     </button>
     <button role="menuitemcheckbox" aria-checked={fullscreen} onclick={() => runFromMenu(toggleFullscreen)}>
-      <span>{fullscreen ? "還原視窗大小" : "放大至全螢幕"}</span><span class="menu-mark"><Icon name={fullscreen ? "restore" : "fullscreen"} size={14} /></span>
+      <span>{fullscreen ? t.menu.restore : t.menu.fullscreen}</span><span class="menu-mark"><Icon name={fullscreen ? "restore" : "fullscreen"} size={14} /></span>
     </button>
     <button role="menuitem" onclick={() => runFromMenu(toggleCollapsed)}>
-      <span>{collapsed ? "展開面板" : "收合至右下角"}</span>
+      <span>{collapsed ? t.menu.expand : t.menu.collapse}</span>
     </button>
     <hr />
     <button role="menuitem" disabled={!snapshot.translatedText} onclick={() => runFromMenu(() => void copyTranslation())}>
-      <span>複製譯文</span>
+      <span>{t.menu.copyTranslation}</span>
     </button>
     <button role="menuitem" onclick={() => runFromMenu(editSelectedProfile)}>
-      <span>模型設定</span>
+      <span>{t.menu.settings}</span>
     </button>
     <hr />
     <button role="menuitem" onclick={() => runFromMenu(() => void hidePanel())}>
-      <span>隱藏面板</span><kbd>Esc</kbd>
+      <span>{t.menu.hidePanel}</span><kbd>Esc</kbd>
     </button>
   </div>
 {/if}
 
 {#if settingsOpen}
   <div class="dialog-backdrop" role="presentation">
-    <form class="settings-dialog" aria-label="模型設定" onsubmit={(event) => { event.preventDefault(); void saveSettings(); }}>
+    <form class="settings-dialog" aria-label={t.settings.title} onsubmit={(event) => { event.preventDefault(); void saveSettings(); }}>
       <div class="dialog-heading">
-        <div><p class="eyebrow">MODEL PROFILE</p><h2>模型設定</h2></div>
-        <button type="button" class="icon-button" aria-label="關閉設定" onclick={() => (settingsOpen = false)}>×</button>
+        <div><p class="eyebrow">{t.settings.eyebrow}</p><h2>{t.settings.title}</h2></div>
+        <button type="button" class="icon-button" aria-label={t.settings.close} onclick={() => (settingsOpen = false)}>×</button>
       </div>
 
-      <label>設定名稱<input bind:value={profileDraft.name} required /></label>
-      <label>供應商
+      <label>{t.settings.profileName}<input bind:value={profileDraft.name} required /></label>
+      <label>{t.settings.provider}
         <select value={profileDraft.provider} onchange={(event) => selectProvider(event.currentTarget.value as ProviderId)}>
-          <optgroup label="原生供應商">
+          <optgroup label={t.settings.providerGroupNative}>
             <option value="anthropic">Anthropic</option>
             <option value="azure-openai">Azure OpenAI</option>
             <option value="google-gemini">Google Gemini</option>
             <option value="openai-compatible">OpenAI</option>
             <option value="xai">xAI</option>
           </optgroup>
-          <optgroup label="閘道與地端">
+          <optgroup label={t.settings.providerGroupGateway}>
             <option value="openrouter">OpenRouter</option>
-            <option value="ollama-native">Ollama（本機）</option>
-            <option value="fedgpt">公司內部 API</option>
-            <option value="custom-endpoint">自訂端點</option>
+            <option value="ollama-native">{t.settings.providerOllama}</option>
+            <option value="fedgpt">{t.settings.providerFedGpt}</option>
+            <option value="custom-endpoint">{t.settings.providerCustom}</option>
           </optgroup>
         </select>
       </label>
-      <label>API Base URL<input bind:value={profileDraft.endpoint} required spellcheck="false" placeholder="https://api.example.com" /></label>
-      <label>{profileDraft.provider === "azure-openai" ? "部署名稱" : "模型名稱"}<input bind:value={profileDraft.model} required spellcheck="false" placeholder={profileDraft.provider === "openrouter" ? "例如 anthropic/claude-sonnet-4.5" : "輸入模型 ID"} /></label>
+      <label>{t.settings.endpoint}<input bind:value={profileDraft.endpoint} required spellcheck="false" placeholder={t.settings.endpointPlaceholder} /></label>
+      <label>{profileDraft.provider === "azure-openai" ? t.settings.deployment : t.settings.modelName}<input bind:value={profileDraft.model} required spellcheck="false" placeholder={profileDraft.provider === "openrouter" ? t.settings.openRouterPlaceholder : t.settings.modelPlaceholder} /></label>
       {#if profileDraft.provider !== "ollama-native"}
-        <label>{credentialLabel(profileDraft.provider)}<input bind:value={profileDraft.apiKey} type="password" autocomplete="new-password" placeholder="留白則保留既有金鑰" /></label>
+        <label>{credentialLabel(profileDraft.provider)}<input bind:value={profileDraft.apiKey} type="password" autocomplete="new-password" placeholder={t.settings.apiKeyPlaceholder} /></label>
         <p class="privacy-note">
-          {providerNote(profileDraft.provider)} 金鑰只會儲存在 Windows 認證管理員。
+          {providerNote(profileDraft.provider)}
+          {t.settings.credentialNote}
         </p>
       {/if}
       {#if settingsError}<p class="form-error" role="alert">{settingsError}</p>{/if}
 
       <div class="pref-section">
-        <p class="eyebrow">面板行為</p>
+        <p class="eyebrow">{t.prefs.language}</p>
+        <p class="pref-lead">{t.prefs.languageLead}</p>
+        {#each LOCALES as option}
+          <label class="pref-row">
+            <input
+              type="radio"
+              name="ui-locale"
+              checked={uiLocale === option.id}
+              onchange={() => void selectLocale(option.id)}
+            />
+            <!-- 語言名一律用該語言自己的說法，來換語言的人多半正是因為看不懂目前這個。 -->
+            <span lang={option.id}>{option.nativeName}</span>
+          </label>
+        {/each}
+      </div>
+
+      <div class="pref-section">
+        <p class="eyebrow">{t.prefs.panel}</p>
         <label class="pref-row">
           <input
             type="checkbox"
@@ -1244,8 +1357,8 @@
             onchange={(event) => void savePreference("panel/show-source", event.currentTarget.checked)}
           />
           <span>
-            翻譯後展開原文
-            <small>關閉時只顯示譯文，需要對照再手動展開。</small>
+            {t.prefs.showSource}
+            <small>{t.prefs.showSourceHint}</small>
           </span>
         </label>
         <label class="pref-row">
@@ -1255,15 +1368,15 @@
             onchange={(event) => void savePreference("panel/auto-collapse", event.currentTarget.checked)}
           />
           <span>
-            點面板以外的地方時自動收合
-            <small>收合成右下角的小標籤；翻譯或解釋進行中不會收合。</small>
+            {t.prefs.autoCollapse}
+            <small>{t.prefs.autoCollapseHint}</small>
           </span>
         </label>
       </div>
 
       <div class="pref-section">
-        <p class="eyebrow">圖片辨識</p>
-        <p class="pref-lead">截圖翻譯與貼上圖片翻譯時，用什麼把圖片裡的字讀出來。</p>
+        <p class="eyebrow">{t.prefs.imageRecognition}</p>
+        <p class="pref-lead">{t.prefs.imageRecognitionLead}</p>
         <label class="pref-row">
           <input
             type="radio"
@@ -1272,8 +1385,8 @@
             onchange={() => void saveChoicePreference("capture/image-recognition", "ocr")}
           />
           <span>
-            系統 OCR
-            <small>Windows 內建辨識，全程在本機，圖片不會離開這台電腦。速度快，但對手寫字、藝術字、低解析度畫面較弱。</small>
+            {t.prefs.systemOcr}
+            <small>{t.prefs.systemOcrHint}</small>
           </span>
         </label>
         <label class="pref-row">
@@ -1284,8 +1397,8 @@
             onchange={() => void saveChoicePreference("capture/image-recognition", "model")}
           />
           <span>
-            模型辨識
-            <small>交給上方選用的模型讀圖，複雜版面與手寫字準確得多。<strong>圖片會送到模型端點</strong>，且模型必須支援讀圖。</small>
+            {t.prefs.modelOcr}
+            <small>{t.prefs.modelOcrHint}<strong>{t.prefs.modelOcrHintEmphasis}</strong></small>
           </span>
         </label>
         <label class="pref-row">
@@ -1296,20 +1409,17 @@
             onchange={() => void saveChoicePreference("capture/image-recognition", "auto")}
           />
           <span>
-            自動
-            <small>先試模型，模型不支援讀圖或出錯就退回系統 OCR。同樣<strong>會把圖片送到模型端點</strong>。</small>
+            {t.prefs.autoOcr}
+            <small>{t.prefs.autoOcrHint}<strong>{t.prefs.autoOcrHintEmphasis}</strong></small>
           </span>
         </label>
         {#if imageRecognition !== "ocr"}
-          <p class="privacy-note">
-            截圖可能拍到畫面上的任何東西。選用模型辨識等於把那張圖上傳到你設定的端點，
-            地端 Ollama 不出這台電腦，雲端服務則會離開。
-          </p>
+          <p class="privacy-note">{t.prefs.imagePrivacyNote}</p>
         {/if}
       </div>
 
       <div class="pref-section">
-        <p class="eyebrow">選取取字</p>
+        <p class="eyebrow">{t.prefs.selection}</p>
         <label class="pref-row">
           <input
             type="checkbox"
@@ -1317,23 +1427,20 @@
             onchange={(event) => void savePreference("capture/clipboard-fallback", event.currentTarget.checked)}
           />
           <span>
-            問不到選取內容時，改用複製取字
-            <small>
-              讓 Electron、Qt、Java、終端機這類不交代文字的程式也能選取即譯。
-              只在拖曳或連點圈字後才會執行，並會原樣還原你的剪貼簿。
-            </small>
+            {t.prefs.clipboardFallback}
+            <small>{t.prefs.clipboardFallbackHint}</small>
           </span>
         </label>
       </div>
 
       <div class="update-row">
         <div>
-          <p class="eyebrow">UPDATES</p>
+          <p class="eyebrow">{t.prefs.updates}</p>
           <p class="update-state">{updateStatusLabel()}</p>
         </div>
         <div class="update-actions">
           <button type="button" class="text-button" disabled={checkingUpdate} onclick={() => void refreshUpdateStatus({ force: true })}>
-            {checkingUpdate ? "檢查中…" : "檢查更新"}
+            {checkingUpdate ? t.update.checking : t.update.check}
           </button>
           <!-- 沒有新版本時這顆是停用的。可按卻什麼都不會發生的按鈕，
                會讓人以為更新壞了而反覆點。 -->
@@ -1342,12 +1449,12 @@
             class="primary-button update-now"
             disabled={!availableUpdate || installingUpdate}
             onclick={() => void installAvailableUpdate()}
-          >{installingUpdate ? "更新中…" : "立即更新"}</button>
+          >{installingUpdate ? t.update.installing : t.update.installNow}</button>
         </div>
       </div>
       {#if availableUpdate}
         <div class="update-notes-inline">
-          <p class="notes-label">{availableUpdate.version} 更新了什麼</p>
+          <p class="notes-label">{t.update.notesFor(availableUpdate.version)}</p>
           {#if releaseNoteLines(availableUpdate.notes).length}
             <ul>
               {#each releaseNoteLines(availableUpdate.notes) as line}
@@ -1355,14 +1462,14 @@
               {/each}
             </ul>
           {:else}
-            <p class="notes-empty">這個版本沒有附上更新說明。</p>
+            <p class="notes-empty">{t.update.notesEmpty}</p>
           {/if}
-          <p class="update-warning">更新會關閉目前的翻譯視窗並重新啟動，進行中的翻譯會中斷。</p>
+          <p class="update-warning">{t.update.warning}</p>
         </div>
       {/if}
       <div class="dialog-actions">
-        <button type="button" class="text-button" onclick={() => (settingsOpen = false)}>取消</button>
-        <button class="primary-button" disabled={savingSettings}>{savingSettings ? "儲存中…" : "儲存設定"}</button>
+        <button type="button" class="text-button" onclick={() => (settingsOpen = false)}>{t.common.cancel}</button>
+        <button class="primary-button" disabled={savingSettings}>{savingSettings ? t.settings.saving : t.settings.save}</button>
       </div>
     </form>
   </div>
