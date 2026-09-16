@@ -250,6 +250,9 @@ export interface Strings {
     showSourceHint: string;
     autoCollapse: string;
     autoCollapseHint: string;
+    startup: string;
+    launchAtLogin: string;
+    launchAtLoginHint: string;
     imageRecognition: string;
     imageRecognitionLead: string;
     systemOcr: string;

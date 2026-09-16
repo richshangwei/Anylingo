@@ -211,6 +211,9 @@ export const en = {
       autoCollapse: "Collapse when you click outside the panel",
       autoCollapseHint:
         "Collapses to a small icon in the corner. It will not collapse while translating or explaining.",
+      startup: "STARTUP",
+      launchAtLogin: "Start Anylingo when I sign in to Windows",
+      launchAtLoginHint: "Starts the app after sign-in so select-to-translate and keyboard shortcuts are ready immediately.",
       imageRecognition: "Image recognition",
       imageRecognitionLead:
         "What reads the text out of an image, for screen capture and pasted pictures.",

@@ -61,6 +61,7 @@
   let showSourceByDefault = false;
   let autoCollapse = true;
   let clipboardFallback = true;
+  let launchAtLogin = false;
   // 預設是唯一不會把畫面送出去的選項，實際值由 Rust 提供。
   let imageRecognition: "ocr" | "model" | "auto" = "ocr";
   // 由 Rust 的 runtime_status 填入。空字串代表還沒問到，首頁就先不顯示版號列，
@@ -511,6 +512,7 @@
     showSource: boolean;
     autoCollapse: boolean;
     clipboardFallback: boolean;
+    launchAtLogin: boolean;
     imageRecognition: ImageRecognition;
     uiLocale: string;
   };
@@ -520,6 +522,7 @@
     showSourceByDefault = prefs.showSource;
     autoCollapse = prefs.autoCollapse;
     clipboardFallback = prefs.clipboardFallback;
+    launchAtLogin = prefs.launchAtLogin;
     imageRecognition = prefs.imageRecognition;
     // 經過 resolveLocale 而不是直接指派：資料庫裡可能是舊版寫的、或某個已經
     // 移除的語言檔留下的孤兒，認不得就退回預設，不要讓面板整片變成 undefined。
@@ -541,10 +544,12 @@
     if (key === "panel/show-source") showSourceByDefault = value;
     if (key === "panel/auto-collapse") autoCollapse = value;
     if (key === "capture/clipboard-fallback") clipboardFallback = value;
+    if (key === "app/launch-at-login") launchAtLogin = value;
     try {
       await invoke("set_preference", { key, value });
     } catch (error) {
       settingsError = String(error);
+      await loadPreferences().catch(() => undefined);
     }
   }
 
@@ -1370,6 +1375,21 @@
           <span>
             {t.prefs.autoCollapse}
             <small>{t.prefs.autoCollapseHint}</small>
+          </span>
+        </label>
+      </div>
+
+      <div class="pref-section">
+        <p class="eyebrow">{t.prefs.startup}</p>
+        <label class="pref-row">
+          <input
+            type="checkbox"
+            checked={launchAtLogin}
+            onchange={(event) => void savePreference("app/launch-at-login", event.currentTarget.checked)}
+          />
+          <span>
+            {t.prefs.launchAtLogin}
+            <small>{t.prefs.launchAtLoginHint}</small>
           </span>
         </label>
       </div>

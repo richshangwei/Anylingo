@@ -52,6 +52,8 @@ const PREF_AUTO_COLLAPSE: &str = "panel/auto-collapse";
 /// 交代文字的程式，永遠不會冒出「譯」按鈕。留一個開關是因為這條路會朝
 /// 前景程式送按鍵，總有人的工具會被這一下打擾。
 const PREF_CLIPBOARD_FALLBACK: &str = "capture/clipboard-fallback";
+/// 是否在目前 Windows 使用者登入時自動啟動隨譯。預設關閉，必須由使用者主動開啟。
+const PREF_LAUNCH_AT_LOGIN: &str = "app/launch-at-login";
 /// 圖片要用什麼辨識出文字。值見 `ImageRecognition`。
 const PREF_IMAGE_RECOGNITION: &str = "capture/image-recognition";
 /// 目前選用的模型設定檔 id。
@@ -291,6 +293,8 @@ struct Preferences {
     auto_collapse: bool,
     /// 圈完字而 UIA 問不到內容時，是否用模擬 Ctrl+C 補上。預設開啟。
     clipboard_fallback: bool,
+    /// 登入 Windows 後是否自動啟動。預設關閉。
+    launch_at_login: bool,
     /// 圖片辨識方式：`ocr`／`model`／`auto`。預設 `ocr`。
     ///
     /// 預設值刻意是「不上傳」的那一個。截圖可能拍到任何東西，把它送到模型端點
@@ -315,6 +319,9 @@ fn preferences(state: tauri::State<'_, AppState>) -> Result<Preferences, String>
             .map_err(|error| error.to_string())?,
         clipboard_fallback: data
             .flag(PREF_CLIPBOARD_FALLBACK, true)
+            .map_err(|error| error.to_string())?,
+        launch_at_login: data
+            .flag(PREF_LAUNCH_AT_LOGIN, false)
             .map_err(|error| error.to_string())?,
         image_recognition: data
             .choice(PREF_IMAGE_RECOGNITION, ImageRecognition::SystemOcr.as_str())
@@ -447,16 +454,104 @@ fn set_preference(
 ) -> Result<(), String> {
     if !matches!(
         key.as_str(),
-        PREF_SHOW_SOURCE | PREF_AUTO_COLLAPSE | PREF_CLIPBOARD_FALLBACK
+        PREF_SHOW_SOURCE | PREF_AUTO_COLLAPSE | PREF_CLIPBOARD_FALLBACK | PREF_LAUNCH_AT_LOGIN
     ) {
         return Err(format!("不支援的偏好設定：{key}"));
     }
-    state
+    let mut data = state
         .data
         .lock()
-        .map_err(|_| "偏好設定目前無法使用".to_owned())?
-        .set_flag(&key, value)
+        .map_err(|_| "偏好設定目前無法使用".to_owned())?;
+
+    if key == PREF_LAUNCH_AT_LOGIN {
+        // 先改 Windows，再存偏好。若系統拒絕寫入，設定畫面會收到錯誤，資料庫也不會
+        // 留下一個其實沒有生效的勾選狀態。
+        let previous = data
+            .flag(PREF_LAUNCH_AT_LOGIN, false)
+            .map_err(|error| error.to_string())?;
+        set_launch_at_login(value)?;
+        if let Err(error) = data.set_flag(&key, value) {
+            // SQLite 寫入失敗時盡力把 Windows 還原，避免畫面下次讀到舊值、系統卻
+            // 已經套用新值。還原也失敗時仍以原始的儲存錯誤回報，較能指出根因。
+            let _ = set_launch_at_login(previous);
+            return Err(error.to_string());
+        }
+        return Ok(());
+    }
+
+    data.set_flag(&key, value)
         .map_err(|error| error.to_string())
+}
+
+/// 寫入目前使用者的 Run 登錄值，不需要系統管理員權限，也不會影響其他帳號。
+///
+/// 執行檔路徑一定加雙引號，安裝在含空白路徑時 Windows 才不會把前半段誤認成程式。
+#[cfg(windows)]
+fn set_launch_at_login(enabled: bool) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::{
+        Win32::{
+            Foundation::ERROR_FILE_NOT_FOUND,
+            System::Registry::{
+                HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegDeleteValueW,
+                RegOpenKeyExW, RegSetValueExW,
+            },
+        },
+        core::w,
+    };
+
+    let command = if enabled {
+        let executable =
+            std::env::current_exe().map_err(|error| format!("無法取得隨譯執行檔位置：{error}"))?;
+        let mut command = Vec::<u16>::new();
+        command.push('"' as u16);
+        command.extend(executable.as_os_str().encode_wide());
+        command.push('"' as u16);
+        command.push(0);
+        Some(command)
+    } else {
+        None
+    };
+
+    let mut run_key = HKEY::default();
+    let opened = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\CurrentVersion\Run"),
+            None,
+            KEY_SET_VALUE,
+            &mut run_key,
+        )
+    };
+    if opened.0 != 0 {
+        return Err(format!(
+            "無法開啟 Windows 開機啟動設定（錯誤碼 {}）",
+            opened.0
+        ));
+    }
+
+    let operation = if let Some(command) = command {
+        let bytes =
+            unsafe { std::slice::from_raw_parts(command.as_ptr().cast::<u8>(), command.len() * 2) };
+        unsafe { RegSetValueExW(run_key, w!("Floatrans"), None, REG_SZ, Some(bytes)) }
+    } else {
+        unsafe { RegDeleteValueW(run_key, w!("Floatrans")) }
+    };
+    let _ = unsafe { RegCloseKey(run_key) };
+
+    if operation.0 == 0 || (!enabled && operation == ERROR_FILE_NOT_FOUND) {
+        Ok(())
+    } else {
+        Err(format!(
+            "無法更新 Windows 開機啟動設定（錯誤碼 {}）",
+            operation.0
+        ))
+    }
+}
+
+#[cfg(not(windows))]
+fn set_launch_at_login(_enabled: bool) -> Result<(), String> {
+    Err("此功能目前只支援 Windows".to_owned())
 }
 
 /// 依模型設定檔建出對應的供應商。翻譯與解釋共用同一份設定，
