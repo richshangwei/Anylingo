@@ -1126,7 +1126,7 @@ dependencies = [
 
 [[package]]
 name = "floatrans-capture"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "base64 0.22.1",
  "png 0.18.1",
@@ -1137,11 +1137,11 @@ dependencies = [
 
 [[package]]
 name = "floatrans-core"
-version = "0.2.6"
+version = "0.2.7"
 
 [[package]]
 name = "floatrans-desktop"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "floatrans-capture",
  "floatrans-core",
@@ -1159,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "floatrans-providers"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "async-trait",
  "floatrans-core",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "floatrans-storage"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "keyring",
  "rusqlite",
